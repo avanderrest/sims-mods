@@ -24,17 +24,27 @@ def _decompile_one(pyc_path):
     # The decompilers dump parser traces to stdout/stderr when they struggle; silence them.
     sys.stdout = sys.stderr = io.StringIO()
     errors = []
+    partials = []
     for name in ("decompyle3", "uncompyle6"):
+        main = __import__(name + ".main", fromlist=["decompile_file"])
+        out = io.StringIO()
         try:
-            main = __import__(name + ".main", fromlist=["decompile_file"])
-            out = io.StringIO()
             main.decompile_file(str(pyc_path), out)
             py_path.write_text(out.getvalue(), encoding="utf-8")
             pyc_path.unlink()
             return None
         except Exception as e:  # decompilers raise all sorts of things
             errors.append("{}: {}".format(name, str(e).splitlines()[0] if str(e) else type(e).__name__))
-    return "; ".join(errors)
+            # Usually only one function failed; the rest of the output is still good.
+            text = out.getvalue()
+            partials.append((text.count("Parse error"), -len(text), name, text))
+    errors_text = "; ".join(errors)
+    best = min(partials)
+    if best[3].strip():
+        header = ("# PARTIAL DECOMPILE ({}): search this file for 'Parse error' to find the parts\n"
+                  "# that could not be recovered. The original .pyc is kept alongside.\n").format(best[2])
+        py_path.write_text(header + best[3], encoding="utf-8")
+    return errors_text
 
 
 def main():

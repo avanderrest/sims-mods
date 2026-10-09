@@ -2,12 +2,16 @@
 
 Run with Python 3.7:  py -3.7 tools/build.py [mod-name ...] [--no-install]
 
+First runs pytest on every mods/<name>/tests/ (with that mod's scripts/ importable);
+nothing is built if a test fails.
+
 For each folder in mods/ (or only the ones named):
   mods/<name>/scripts/**.py   -> compiled and zipped into build/<creator>_<name>.ts4script
   mods/<name>/package/*.package -> copied as-is (made in Sims 4 Studio)
 Then everything is copied to Mods/<creator>/ unless --no-install is given.
 Script files may sit at most one folder deep inside Mods, which is why we use one flat folder.
 """
+import os
 import py_compile
 import shutil
 import sys
@@ -46,6 +50,15 @@ def main(argv):
                 if d.is_dir() and (not names or d.name in names)]
     if names and len(mod_dirs) != len(names):
         sys.exit("unknown mod(s): {}".format(set(names) - {d.name for d in mod_dirs}))
+
+    tested = [str(d / "tests") for d in mod_dirs if (d / "tests").is_dir()]
+    if tested:
+        import subprocess
+        # Each mod's scripts/ goes on the path so tests can import the pure-logic modules.
+        env = dict(os.environ, PYTHONPATH=os.pathsep.join(
+            str(d / "scripts") for d in mod_dirs if (d / "tests").is_dir()))
+        if subprocess.call([sys.executable, "-m", "pytest", "-q", *tested], env=env) != 0:
+            sys.exit("tests failed: nothing was built")
 
     config.BUILD_DIR.mkdir(exist_ok=True)
     built = []
