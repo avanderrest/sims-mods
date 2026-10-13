@@ -33,8 +33,11 @@ from interactions.priority import Priority
 from server_commands.argument_helpers import OptionalSimInfoParam, get_optional_target
 from sims4.resources import Types
 
+import npc_llm
 import npc_log
-from npc_routine import RoutineEntry, RoutineStore, DAY_NAMES
+from npc_brain import NONE_ACTION, build_prompt
+from npc_offlot import ACTIVITY_SKILLS, offlot_points
+from npc_routine import ACTIVITIES, DAY_NAMES, RoutineEntry, RoutineStore
 
 _ROUTINES_PATH = os.path.join(os.path.expanduser("~"), "Documents", "Electronic Arts",
                                "The Sims 4", "Mods", "BlueRabbit477", "data", "npc_routines.json")
@@ -302,6 +305,7 @@ def _push_from_nearby_object(sim, activity, report):
 
 def _run_tick(report=None):
     _ensure_loaded()
+    _apply_llm_answers(report)
     if not _npc_mode_sim_ids:
         _say(report, "tick: no sims in NPC mode")
         return
@@ -312,16 +316,157 @@ def _run_tick(report=None):
     for sim_id in list(_npc_mode_sim_ids):
         routine = _store.get(sim_id)
         activity = routine.due_activity(day, hour)
-        if activity is None:
-            _say(report, "  sim {}: nothing due ({} routine entries)".format(sim_id, len(routine.entries)))
-            continue
         sim_info = sim_info_manager.get(sim_id)
         sim = sim_info.get_sim_instance() if sim_info is not None else None
+        if activity is None:
+            _say(report, "  sim {}: nothing due ({} routine entries)".format(sim_id, len(routine.entries)))
+            if sim is not None and npc_llm.instructions_for(sim_id):
+                _ask_llm(sim_info, report)
+            continue
         if sim is None:
-            # Not on the loaded lot right now - phase 3 territory.
-            _say(report, "  sim {}: {!r} due but the sim isn't on this lot".format(sim_id, activity))
+            # Not on the loaded lot: phase 3, give them a share of what they'd have learned.
+            if sim_info is not None:
+                _offlot_hour(sim_info, activity, report)
             continue
         _push_activity(sim, activity, report)
+
+
+# --- Phase 3: off-lot results -------------------------------------------------------------
+_skill_types = None
+
+
+def _skill_type(short_name):
+    """Adult skill statistic whose tuning name ends with _<short_name> (Fitness -> ..._Fitness)."""
+    global _skill_types
+    if _skill_types is None:
+        found = {}
+        wanted = {s.lower(): s for s in ACTIVITY_SKILLS.values() if s}
+        for cls in services.get_instance_manager(Types.STATISTIC).types.values():
+            name = cls.__name__.lower()
+            if "skill" not in name:
+                continue
+            short = wanted.get(name.rsplit("_", 1)[-1])
+            if short and (short not in found or ("adult" in name and "adult" not in found[short].__name__.lower())):
+                found[short] = cls
+        _skill_types = found
+        npc_log.log("off-lot skills: {}".format({k: v.__name__ for k, v in found.items()}))
+    return _skill_types.get(short_name)
+
+
+def _offlot_hour(sim_info, activity, report):
+    try:
+        tracker = getattr(sim_info, "career_tracker", None)
+        if tracker is not None and tracker.currently_at_work:
+            _say(report, "  sim {}: {!r} due but at work".format(sim_info.sim_id, activity))
+            return
+        short = ACTIVITY_SKILLS.get(activity)
+        skill_type = _skill_type(short) if short else None
+        if skill_type is None:
+            _say(report, "  sim {}: {!r} off the lot (no skill to train)".format(sim_info.sim_id, activity))
+            return
+        stat = sim_info.get_statistic(skill_type, add=True)
+        if stat is None:
+            return
+        level = stat.get_user_value()
+        start = skill_type.convert_from_user_value(level)
+        next_start = skill_type.convert_from_user_value(min(level + 1, skill_type.max_level))
+        max_points = skill_type.convert_from_user_value(skill_type.max_level)
+        points = offlot_points(activity, next_start - start, stat.get_value(), max_points)
+        if points > 0:
+            stat.add_value(points)
+        _say(report, "  sim {}: {!r} off the lot -> {} +{:.0f} points (level {})".format(
+            sim_info.sim_id, activity, short, points, level))
+    except Exception:
+        npc_log.log_exception("off-lot results for sim {}".format(sim_info.sim_id))
+
+
+# --- Phase 4: local LLM brain -------------------------------------------------------------
+_PREFIXES = ("trait_", "statistic_skill_adultmajor_", "statistic_skill_adultminor_", "mood_", "motive_",
+             "commodity_motive_")
+
+
+def _clean(name):
+    for prefix in _PREFIXES:
+        if name.lower().startswith(prefix):
+            return name[len(prefix):]
+    return name
+
+
+def _describe(sim_info):
+    desc = {"name": "{} {}".format(sim_info.first_name, sim_info.last_name).strip(),
+            "age": getattr(sim_info.age, "name", str(sim_info.age)).lower()}
+    try:
+        desc["traits"] = [_clean(t.__name__) for t in sim_info.trait_tracker.personality_traits]
+    except Exception:
+        desc["traits"] = []
+    try:
+        desc["mood"] = _clean(sim_info.get_mood().__name__)
+    except Exception:
+        pass
+    needs = {}
+    try:
+        for stat in sim_info.commodity_tracker:
+            name = type(stat).__name__
+            if name.lower().startswith(("motive_", "commodity_motive_")) and "visible" not in name.lower():
+                needs[_clean(name)] = int((stat.get_value() + 100) / 2)
+    except Exception:
+        pass
+    desc["needs"] = needs
+    try:
+        desc["skills"] = {_clean(type(s).__name__): s.get_user_value()
+                          for s in sim_info.all_skills() if s.get_user_value() > 0}
+    except Exception:
+        desc["skills"] = {}
+    try:
+        desc["job"] = ", ".join(type(c).__name__ for c in sim_info.career_tracker.careers.values())
+    except Exception:
+        pass
+    now = services.time_service().sim_timeline.now
+    desc["time"] = "{} {}:00".format(DAY_NAMES[now.day()], now.hour())
+    return desc
+
+
+def _ask_llm(sim_info, report):
+    sim_id = sim_info.sim_id
+    if npc_llm.is_pending(sim_id):
+        _say(report, "  sim {}: waiting for the LLM's answer".format(sim_id))
+        return
+    try:
+        prompt, options = build_prompt(_describe(sim_info), npc_llm.instructions_for(sim_id), sorted(ACTIVITIES))
+        npc_llm.ask(sim_id, prompt, options)
+        npc_log.log("asked the LLM for sim {}:\n{}".format(sim_id, prompt))
+        _say(report, "  sim {}: asked the LLM what to do".format(sim_id))
+    except Exception:
+        npc_log.log_exception("asking the LLM for sim {}".format(sim_id))
+
+
+def _apply_llm_answers(report=None):
+    for sim_id, action, reason, error in npc_llm.take_answers():
+        if error:
+            _say(report, "LLM for sim {}: {}".format(sim_id, error), level="WARN")
+            continue
+        _say(report, "LLM for sim {}: {} ({})".format(sim_id, action, reason))
+        if action in (None, NONE_ACTION):
+            continue
+        sim_info = services.sim_info_manager().get(sim_id)
+        sim = sim_info.get_sim_instance() if sim_info is not None else None
+        if sim is None:
+            continue
+        if _push_activity(sim, action, report) and reason and npc_llm.data().get("notify", True):
+            _notify(sim_info, "{} is going to {}".format(sim_info.first_name, action), reason)
+
+
+def _notify(sim_info, title, text):
+    try:
+        from sims4.localization import LocalizationHelperTuning
+        from ui.ui_dialog_notification import UiDialogNotification
+        dialog = UiDialogNotification.TunableFactory().default(
+            sim_info,
+            title=lambda *_, **__: LocalizationHelperTuning.get_raw_text(title),
+            text=lambda *_, **__: LocalizationHelperTuning.get_raw_text(text))
+        dialog.show_dialog()
+    except Exception:
+        npc_log.log_exception("showing notification")
 
 
 def _tick(*_args, **_kwargs):

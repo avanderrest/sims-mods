@@ -1,6 +1,6 @@
 # Neighborhood Stories Rebalance
 
-**Status:** planning · **Type:** mostly tuning (`.package`), possibly a small script · **Size:** small; good first mod
+**Status:** phase 1 built, untested in-game · **Type:** script (not tuning — see below) · **Size:** small
 
 ## Goal
 
@@ -26,22 +26,76 @@ We change the existing system's numbers rather than replace it, so EA's per-hous
 
 The age anchors need converting to the game's lifespan setting (Normal / Long), since the young-adult stage covers roughly ages 18 to the early 30s.
 
-## How it works in the game (to confirm after decompiling)
+## How it works in the game (confirmed by reading the decompiled scripts, 2026-10-09 overnight)
 
-1. Search `ea_scripts/simulation/` for `story_progression`. The newer Neighborhood Stories code (patch 121 and later) defines arcs/chapters/actions there. Note which tuning classes they use.
-2. In Sims 4 Studio, extract the matching tuning XML and find the instances for: adopt child, adopt pet, adopt horse, move out, move in together, have baby.
-3. Write down each one's weights, chances, cooldowns and tests in a table here.
+`StoryProgressionService` (`story_progression_service.py`) has a class-level tunable
+`STORY_PROGRESSION_PASSES`: a list of passes, each with `potential_arcs` — a **weighted list**
+of `(story_arc, weight)` pairs (`weight` is an int, tunable minimum **1**), plus per-demographic
+`chance_of_occurrence` percentages. This is a code-visible structure, not something we can read
+out of the decompiled `.py` files as numbers (the actual XML tuning values live in the game's
+packed data files, which need Sims 4 Studio to extract — we didn't have a running game tonight to
+check it that way). **So this is a script mod, not a `.package`**: we read and adjust the already
+tuning-loaded Python objects at runtime instead of editing XML.
 
-**Open question:** are the weights fixed tuning values, or calculated in Python? If they're tuning, this whole mod is a `.package`. If they're code, we add a small script that injects the changed values.
+Each `story_arc` resolves (via its first `StoryChapter`) to a list of `actions`. The action
+*type* tells us what the arc actually does — confirmed in `story_progression_chapter.py`:
+
+- `SimStoryChapter.actions` variants: `add_family_member` → `AddFamilyMemberStoryProgressionAction`
+  (adoption — children, cats, dogs *and* horses all use this one action with a different
+  `template` tunable each time, so we must also look at the action's `template` reference, not
+  just its class), `pregnancy` → `MakePregnantStoryProgressionAction`, plus career/death/relationship actions we leave alone.
+- `HouseholdStoryChapter.actions` variants: `move_in` → `MoveInStoryProgressionAction`,
+  `move_out` → `MoveOutStoryProgressionAction`.
+
+So: walk `STORY_PROGRESSION_PASSES` → `potential_arcs` → each arc's initial chapter's `actions`,
+classify by action class (and, for adoption, by the `template` name: anything containing "horse"
+→ horse, "cat"/"dog"/"pet" → pet, else → child), and scale `weight` for the matching entries.
+
+**What we could *not* confirm tonight, for lack of a running game:**
+- The actual tuning instance names and current weight numbers (needs Sims 4 Studio against a
+  loaded game, or a save).
+- Whether `action_factory.factory` is really the right attribute to read the action class from a
+  resolved `TunableVariant` — the code does `.TunableFactory()` which matches this pattern from
+  other tuning classes we've seen, but we have no running game to check it against. The script
+  below tries a few attribute names and logs which one worked (or that none did), rather than
+  guessing silently.
+- Whether the resolved `TunableTuple` entries (the `(story_arc, weight)` pairs) are actually
+  mutable at runtime. The script checks this and logs it rather than assuming.
+
+## Multipliers (phase 1, implemented)
+
+See `scripts/nsr_classify.py` for the actual numbers. Weight is an integer with a tunable floor
+of 1, so a weight of 1 can only ever be *left at 1*, not pushed to 0 — a true "almost never" for
+horse adoption isn't reachable this way if EA's base weight is already low. Noted as a limitation
+until we can check real numbers.
+
+| Category | Multiplier |
+|---|---|
+| child adoption | ×0.1 |
+| horse adoption | ×0.05 (and see the floor-of-1 limitation above) |
+| cat/dog adoption | ×1 (left alone) |
+| move out | ×3 |
+| move in together | ×2 |
+| pregnancy | ×1 (left alone — out of scope this round) |
+| anything else | ×1 (left alone; logged either way) |
 
 ## Steps
 
-1. **Discovery** (see above). Record the current values.
-2. **Write the changes** as XML Injector snippets where possible, so we don't overwrite whole EA files and stay compatible with other mods. Fall back to overriding the tuning only where a snippet can't reach.
-3. **Separate horse and pet adoption** if they share one "adopt" weight.
-4. **Make young adults move out more:** raise the move-out weight for young adults living with a parent, and maybe add a test that it only applies when they have a job or money.
-5. **Testing:** set up a test save with ~10 unplayed households. Speed through 2–3 sim-weeks on ultra speed, then count events. The game logs Neighborhood Stories events in the phone's notifications, and we could add a small debug script that writes them to a file.
-6. Publish (CurseForge / Mod The Sims) with a compatibility note about MCCC story progression.
+1. ~~Discovery~~ (done above, from source — not yet from a live game; re-check once the game can run).
+2. **Built:** `nsr_classify.py` (pure logic: no game imports, pytest-covered) + `nsr_main.py`
+   (hooks `zone.Zone.on_loading_screen_animation_finished`, applies the multipliers once per game
+   session — guarded so re-loading a save doesn't compound the multiplier — and logs everything
+   it did/couldn't do to `Mods/BlueRabbit477/logs/neighborhood-stories-rebalance.log`).
+3. Cheat `bluerabbit477.nsr.status` prints the last run's findings (arc name, category, old
+   weight, new weight) — **this is the fast way to check the mechanism itself works**, no need to
+   wait sim-weeks for an adoption to or not happen. Do this first.
+4. **Still to do, once it can be checked against a real game:** confirm the attribute-name
+   guesses above against real tuning objects; confirm actual current weights are sane to multiply
+   (if EA's own weights are already tiny ints, these multipliers may round to no change — see the
+   floor-of-1 note); consider also touching `chance_of_occurrence` (not done tonight, lower
+   confidence); the slower, true test — a save with ~10 unplayed households sped through 2-3
+   sim-weeks, counting actual events.
+5. Publish (CurseForge / Mod The Sims) with a compatibility note about MCCC story progression — later.
 
 ## Out of scope
 

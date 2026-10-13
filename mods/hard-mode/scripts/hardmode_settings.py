@@ -4,7 +4,18 @@ import os
 
 # careers: the rule is evaluated (hard.check, and the log when someone picks a job).
 # enforce: picking a job that fails the rule is actually refused. Off until tested in-game.
-DEFAULT_SETTINGS = {"careers": True, "enforce": False}
+# firing: missed work days get sims fired, and fired sims can't get a new job for a while.
+# selling: made/gathered items sell for less, and each kind's market fills up.
+# markups: shop/stall/restaurant/stand markups earn less and less, customers mind more.
+# bills: bills grow with household size.
+# debt: unpaid bills become debt instead of utilities being shut off (up to a credit limit).
+# skills: talents and trait affinity speed skills up; without them, learning slows from level 7.
+# life: relationships fade faster, bad moods linger, pregnancy/childcare cost money,
+#       reward store prices go up.
+# start_funds: what a brand-new household starts with (the game gives 20000).
+DEFAULT_SETTINGS = {"careers": True, "enforce": False, "firing": True, "selling": True,
+                    "markups": True, "bills": True, "debt": True, "skills": True,
+                    "life": True, "start_funds": 10000}
 
 
 class Settings:
@@ -19,7 +30,13 @@ class Settings:
     def set(self, key, value):
         if key not in DEFAULT_SETTINGS:
             raise KeyError(key)
-        self.values[key] = bool(value)
+        if isinstance(DEFAULT_SETTINGS[key], bool):
+            self.values[key] = bool(value)
+        else:
+            self.values[key] = int(value)
+
+    def is_switch(self, key):
+        return isinstance(DEFAULT_SETTINGS.get(key), bool)
 
     def to_json(self):
         return json.dumps(self.values)

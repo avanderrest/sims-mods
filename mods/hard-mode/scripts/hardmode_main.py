@@ -6,20 +6,22 @@ which sends the careers.select command - so we wrap that one command. It only ru
 player choices: save loading, NPC story progression, business employees, etc. add careers
 by other routes and are never touched.
 
-Two settings (bluerabbit477.hard.*):
+Getting fired: missed work days are counted (CareerBase._collect_rewards); enough of them
+gets the sim fired, and after any firing employers won't hire them for a few days.
+
+Settings (all of Hard Mode's are in hardmode_settings.py):
   careers on|off  - evaluate the rule (hard.check, and a log line on every job pick)
-  enforce on|off  - actually refuse a job pick that fails the rule. Default OFF, so a
-                    first test only logs what it *would* do.
+  enforce on|off  - actually refuse a job pick that fails the rule.
+  firing on|off   - missed days get sims fired; fired sims can't be hired for a while.
 
 Cheats:
-  bluerabbit477.hard.status
+  bluerabbit477.hard.status                - every Hard Mode setting
+  bluerabbit477.hard.set <setting> <value> - change one
   bluerabbit477.hard.careers on|off
   bluerabbit477.hard.enforce on|off
   bluerabbit477.hard.check <career> [sim]  - what the rule decides for that sim, and why
   bluerabbit477.hard.gates                 - which game careers/skills our table matched
 """
-import os
-
 import services
 import sims4.commands
 import sims4.resources
@@ -29,33 +31,25 @@ from server_commands import career_commands
 from server_commands.argument_helpers import OptionalSimInfoParam, TunableInstanceParam, get_optional_target
 
 import hardmode_log
+import hardmode_state
 from hardmode_careers import ALL_SKILLS, GATES, check_join, gate_for_career
-from hardmode_settings import Settings
+from hardmode_settings import DEFAULT_SETTINGS
+from hardmode_work import FIRED_COOLDOWN_DAYS, MISSED_DAYS_TO_FIRE, WorkRecord
 
-_SETTINGS_PATH = os.path.join(os.path.expanduser("~"), "Documents", "Electronic Arts",
-                              "The Sims 4", "Mods", "BlueRabbit477", "data", "hard_mode_settings.json")
-
-_settings = Settings()
-_loaded = False
+_settings = hardmode_state.settings
+_ensure_loaded = hardmode_state.ensure_settings
+_save = hardmode_state.save_settings
 _skill_types = None  # skill name (e.g. "Logic") -> skill statistic class
 
-
-def _ensure_loaded():
-    global _loaded
-    if not _loaded:
-        try:
-            _settings.load(_SETTINGS_PATH)
-        except Exception:
-            hardmode_log.log_exception("loading settings")
-        _loaded = True
+_WORK_FILE = "hard_mode_work.json"
+_work = None
 
 
-def _save():
-    try:
-        os.makedirs(os.path.dirname(_SETTINGS_PATH), exist_ok=True)
-        _settings.save(_SETTINGS_PATH)
-    except Exception:
-        hardmode_log.log_exception("saving settings")
+def _work_record():
+    global _work
+    if _work is None:
+        _work = WorkRecord(hardmode_state.load_json(_WORK_FILE, {}))
+    return _work
 
 
 def _resolve_skills():
@@ -138,21 +132,11 @@ def _evaluate(sim_info, career_type):
     return blocked, reason, details
 
 
-def _sim_name(sim_info):
-    return "{} {}".format(getattr(sim_info, "first_name", ""), getattr(sim_info, "last_name", "")).strip() or str(sim_info.sim_id)
+_sim_name = hardmode_state.sim_name
 
 
 def _notify(sim_info, title, text):
-    try:
-        from sims4.localization import LocalizationHelperTuning
-        from ui.ui_dialog_notification import UiDialogNotification
-        dialog = UiDialogNotification.TunableFactory().default(
-            sim_info,
-            title=lambda *_, **__: LocalizationHelperTuning.get_raw_text(title),
-            text=lambda *_, **__: LocalizationHelperTuning.get_raw_text(text))
-        dialog.show_dialog()
-    except Exception:
-        hardmode_log.log_exception("showing notification")
+    hardmode_state.notify(title, text, sim_info)
 
 
 # --- The job-picker hook --------------------------------------------------------------
@@ -180,6 +164,11 @@ def _select_career(sim_id: int = None, career_instance_id: int = None, track_id:
             career_type = services.get_instance_manager(sims4.resources.Types.CAREER).get(int(career_instance_id))
             if sim_info is not None and career_type is not None:
                 blocked, why, details = _evaluate(sim_info, career_type)
+                if not blocked and details["full_time"] and not details["already_in_it"] and _settings.get("firing"):
+                    left = _work_record().cooldown_left(sim_info.sim_id, hardmode_state.sim_today())
+                    if left > 0:
+                        blocked = True
+                        why = "was fired recently; employers won't hire them for another {:.1f} sim day(s)".format(left)
                 enforce = _settings.get("enforce")
                 hardmode_log.log("job pick: {} -> {}: blocked={} enforce={} ({}) {}".format(
                     _sim_name(sim_info), career_type.__name__, blocked, enforce, why, details))
@@ -207,6 +196,86 @@ except Exception:
     hardmode_log.log_exception("installing careers.select hook")
 
 
+# --- Getting fired ---------------------------------------------------------------------
+# EA's CareerBase._collect_rewards runs once at the end of every work day of a player sim
+# (also for days they never showed up: time_at_work is 0 then). We count the day as missed
+# when they were there for less than half of it; enough missed days -> fired. Every firing
+# (ours or the game's own, for bad performance) goes through CareerBase._fire, which we
+# wrap only to remember the date for the "employers won't hire you yet" cooldown.
+from careers.career_base import CareerBase
+
+_original_collect_rewards = CareerBase._collect_rewards
+_original_fire = CareerBase._fire
+
+
+def _collect_rewards(self, time_at_work, *args, **kwargs):
+    share = None
+    try:
+        if _settings.get("firing") and getattr(self, "career_category", None) == CareerCategory.Work                 and self._sim_info.is_selectable:
+            hours = self.get_current_work_duration_in_hours()
+            share = (time_at_work / hours) if hours else 1.0
+    except Exception:
+        hardmode_log.log_exception("reading the work day")
+    result = _original_collect_rewards(self, time_at_work, *args, **kwargs)
+    if share is not None:
+        try:
+            _after_work_day(self, share)
+        except Exception:
+            hardmode_log.log_exception("counting a missed work day")
+    return result
+
+
+def _after_work_day(career, share):
+    import alarms
+    from date_and_time import create_time_span
+    sim_info = career._sim_info
+    record = _work_record()
+    today = hardmode_state.sim_today()
+    fire = record.record_day(sim_info.sim_id, type(career).__name__, share, today)
+    missed = record.missed_days(sim_info.sim_id, type(career).__name__, today)
+    hardmode_state.save_json(_WORK_FILE, record.to_dict())
+    hardmode_log.log("work day: {} {} at work {:.0%}, missed days this week: {}{}".format(
+        _sim_name(sim_info), type(career).__name__, share, missed, " -> FIRED" if fire else ""))
+    if fire:
+        # Fire a moment later, after the game has finished closing the work day.
+        alarms.add_alarm(career, create_time_span(minutes=5), lambda _: _fire_now(career))
+    elif missed == MISSED_DAYS_TO_FIRE - 1 and share < 1:
+        _notify(sim_info, "Warning from work",
+                "{} has missed {} work days this week. One more and they'll be fired.".format(
+                    sim_info.first_name, missed))
+
+
+def _fire_now(career):
+    try:
+        sim_info = career._sim_info
+        if career.guid64 not in sim_info.career_tracker.careers:
+            return
+        hardmode_log.log("firing {} from {} for missed work".format(_sim_name(sim_info), type(career).__name__))
+        _notify(sim_info, "Fired",
+                "{} missed too many work days and has been fired. Other employers won't hire them for {} days."
+                .format(sim_info.first_name, FIRED_COOLDOWN_DAYS))
+        career.fire()
+    except Exception:
+        hardmode_log.log_exception("firing for missed work")
+
+
+def _fire(self, *args, **kwargs):
+    try:
+        sim_info = self._sim_info
+        if sim_info.is_selectable and getattr(self, "career_category", None) == CareerCategory.Work:
+            _work_record().record_fired(sim_info.sim_id, type(self).__name__, hardmode_state.sim_today())
+            hardmode_state.save_json(_WORK_FILE, _work_record().to_dict())
+            hardmode_log.log("{} was fired from {}".format(_sim_name(sim_info), type(self).__name__))
+    except Exception:
+        hardmode_log.log_exception("recording a firing")
+    return _original_fire(self, *args, **kwargs)
+
+
+CareerBase._collect_rewards = _collect_rewards
+CareerBase._fire = _fire
+hardmode_log.log("firing hooks installed")
+
+
 # --- Cheats --------------------------------------------------------------------------
 def _set_from_cheat(key, state, output):
     if state not in ("on", "off"):
@@ -232,9 +301,35 @@ def hard_enforce(state: str, _connection=None):
 def hard_status(_connection=None):
     output = sims4.commands.CheatOutput(_connection)
     _ensure_loaded()
-    output("Hard Mode: careers = {}, enforce = {}".format(
-        "on" if _settings.get("careers") else "off", "on" if _settings.get("enforce") else "off"))
-    output("(enforce off: job picks are only logged, never refused)")
+    parts = []
+    for key in DEFAULT_SETTINGS:
+        value = _settings.get(key)
+        parts.append("{} = {}".format(key, ("on" if value else "off") if _settings.is_switch(key) else value))
+    output("Hard Mode: " + ", ".join(parts))
+    output("Change one with: bluerabbit477.hard.set <setting> on|off (start_funds takes a number)")
+
+
+@sims4.commands.Command("bluerabbit477.hard.set", command_type=sims4.commands.CommandType.Live)
+def hard_set(key: str = "", value: str = "", _connection=None):
+    output = sims4.commands.CheatOutput(_connection)
+    _ensure_loaded()
+    if key not in DEFAULT_SETTINGS:
+        output("Settings: {}".format(", ".join(DEFAULT_SETTINGS)))
+        return
+    try:
+        if _settings.is_switch(key):
+            if value not in ("on", "off"):
+                output("Usage: bluerabbit477.hard.set {} on|off".format(key))
+                return
+            _settings.set(key, value == "on")
+        else:
+            _settings.set(key, int(value))
+    except ValueError:
+        output("{} needs a number".format(key))
+        return
+    _save()
+    hardmode_log.log("setting {} = {}".format(key, _settings.get(key)))
+    output("Hard Mode: {} is now {}.".format(key, value))
 
 
 @sims4.commands.Command("bluerabbit477.hard.check", command_type=sims4.commands.CommandType.Live)

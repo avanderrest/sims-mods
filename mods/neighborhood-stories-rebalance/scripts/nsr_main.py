@@ -4,7 +4,9 @@ See PLAN.md for how this maps onto EA's code, and what's still unverified for la
 running game. Everything here is defensive: a wrong guess should log a line and do
 nothing, never break the base game's own on_loading_screen_animation_finished.
 
-Cheat: bluerabbit477.nsr.status - prints what the last zone load found/changed.
+Cheats: bluerabbit477.nsr.status - prints what the last zone load found/changed.
+        bluerabbit477.nsr.events - counts of story arcs started/ended (kept across sessions).
+        bluerabbit477.nsr.events_reset - start the counts again.
 """
 import sims4.commands
 import services
@@ -108,3 +110,83 @@ def nsr_status(_connection=None):
         output("  {arc}: {category}  weight {old_weight} -> {new_weight}{note}".format(
             note="" if s.get("applied") else " (unchanged)", **s))
     output("Full detail in Mods/BlueRabbit477/logs/neighborhood-stories-rebalance.log")
+
+
+# --- Event tally: which story arcs actually start and how they end ---------------------
+# Counts are kept in Mods/BlueRabbit477/data/nsr_events.json so they build up across play
+# sessions. Both hooks only record; they always call EA's original first and return its result.
+import os
+
+import story_progression.story_progression_telemetry as sp_telemetry
+import story_progression.story_progression_tracker as sp_tracker
+from story_progression.story_progression_result import STORY_PROGRESSION_RESULT_TYPE_STRINGS
+
+from nsr_events import EventTally
+
+_EVENTS_PATH = os.path.join(os.path.expanduser("~"), "Documents", "Electronic Arts",
+                            "The Sims 4", "Mods", "BlueRabbit477", "data", "nsr_events.json")
+_tally = None
+
+
+def _record(kind, arc_name, result=None):
+    global _tally
+    try:
+        if _tally is None:
+            _tally = EventTally.load(_EVENTS_PATH)
+        try:
+            when = str(services.time_service().sim_now)
+        except Exception:
+            when = None
+        _tally.add(kind, arc_name, when=when, result=result)
+        _tally.save(_EVENTS_PATH)
+        nsr_log.log("event {}: {}{}".format(kind, arc_name, " ({})".format(result) if result else ""))
+    except Exception:
+        nsr_log.log_exception("recording {} event for {}".format(kind, arc_name))
+
+
+_original_add_arc = sp_tracker.BaseStoryProgressionTracker.add_arc
+
+
+def _patched_add_arc(self, new_arc, **kwargs):
+    result = _original_add_arc(self, new_arc, **kwargs)
+    if result:
+        _record("started", getattr(new_arc, "__name__", str(new_arc)))
+    return result
+
+
+sp_tracker.BaseStoryProgressionTracker.add_arc = _patched_add_arc
+
+# The tracker calls this through the module whenever an arc ends, with how it ended.
+_original_arc_complete = sp_telemetry.send_arc_complete_telemetry
+
+
+def _patched_arc_complete(chapter, result_type):
+    try:
+        _record("ended", type(chapter.arc).__name__,
+                result=STORY_PROGRESSION_RESULT_TYPE_STRINGS.get(result_type, str(result_type)))
+    except Exception:
+        nsr_log.log_exception("arc complete hook")
+    return _original_arc_complete(chapter, result_type)
+
+
+sp_telemetry.send_arc_complete_telemetry = _patched_arc_complete
+
+
+@sims4.commands.Command("bluerabbit477.nsr.events", command_type=sims4.commands.CommandType.Live)
+def nsr_events(_connection=None):
+    output = sims4.commands.CheatOutput(_connection)
+    tally = _tally if _tally is not None else EventTally.load(_EVENTS_PATH)
+    if not tally.events:
+        output("No Neighborhood Stories events recorded yet. They're picked once per sim day.")
+        return
+    output("Neighborhood Stories events recorded so far ({} total):".format(len(tally.events)))
+    for line in tally.summary_lines():
+        output("  " + line)
+
+
+@sims4.commands.Command("bluerabbit477.nsr.events_reset", command_type=sims4.commands.CommandType.Live)
+def nsr_events_reset(_connection=None):
+    global _tally
+    _tally = EventTally()
+    _tally.save(_EVENTS_PATH)
+    sims4.commands.CheatOutput(_connection)("Neighborhood Stories event counts reset.")
