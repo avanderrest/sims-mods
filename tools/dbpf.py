@@ -1,8 +1,9 @@
-"""Minimal reader for The Sims 4's .package files (DBPF 2.1), for reading EA's tuning.
+"""Minimal reader for The Sims 4's .package files (DBPF 2.1), for reading EA's tuning,
+and a writer for our own small packages (tools/tuning.py).
 
-Only reading: lists a package's resources and returns their (decompressed) bytes.
-Supports the compression types EA's simulation packages use: none, zlib, and the old
-internal "RefPack" format.
+Reading: lists a package's resources and returns their (decompressed) bytes. Supports the
+compression types EA's simulation packages use: none, zlib, and the old internal "RefPack"
+format. Writing: uncompressed only, which the game loads fine.
 """
 import struct
 import zlib
@@ -129,3 +130,24 @@ def refpack_decompress(src):
         if b0 >= 0xFC:
             break
     return bytes(out[:out_size])
+
+
+def write_package(path, resources):
+    """resources: [(type, group, instance, bytes)]. Writes an uncompressed DBPF 2.1 package."""
+    header_size = 96
+    body = bytearray()
+    index = bytearray(struct.pack("<I", 0))   # flags: no fields shared between entries
+    for type_, group, instance, data in resources:
+        offset = header_size + len(body)
+        body += data
+        index += struct.pack("<IIIIIIIHH", type_, group, instance >> 32, instance & 0xFFFFFFFF, offset,
+                             len(data) | 0x80000000, len(data), COMPRESSION_NONE, 1)
+    header = bytearray(header_size)
+    header[0:4] = b"DBPF"
+    struct.pack_into("<II", header, 4, 2, 1)                       # version 2.1
+    struct.pack_into("<I", header, 36, len(resources))             # index entry count
+    struct.pack_into("<I", header, 44, len(index))                 # index size
+    struct.pack_into("<I", header, 60, 3)                          # index version
+    struct.pack_into("<I", header, 64, header_size + len(body))    # index position
+    with open(str(path), "wb") as f:
+        f.write(bytes(header) + bytes(body) + bytes(index))

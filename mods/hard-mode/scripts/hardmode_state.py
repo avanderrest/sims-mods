@@ -91,6 +91,34 @@ def notify(title, text, sim_info=None):
         hardmode_log.log_exception("showing notification")
 
 
+def pick(sim_info, title, text, options, callback):
+    """A list to pick one from. options: [(label, value)]; callback(value) runs only on OK."""
+    from sims4.localization import LocalizationHelperTuning
+    from ui.ui_dialog_picker import ObjectPickerRow, UiDialogObjectPicker, UiObjectPicker
+    raw = LocalizationHelperTuning.get_raw_text
+    dialog = UiObjectPicker.TunableFactory().default(
+        sim_info,
+        text=lambda *_, **__: raw(text),
+        title=lambda *_, **__: raw(title),
+        min_selectable=1,
+        # Every field must be given: built outside tuning, nothing fills in defaults.
+        max_selectable=UiDialogObjectPicker._MaxSelectableStatic(number_selectable=1, exclude_previously_selected=False),
+        is_sortable=False,
+        picker_type=UiObjectPicker.UiObjectPickerObjectPickerType.OBJECT)
+    for i, (label, value) in enumerate(options):
+        dialog.add_row(ObjectPickerRow(option_id=i, name=raw(label), tag=value))
+
+    def on_response(d):
+        try:
+            if d.accepted and d.get_result_tags():
+                callback(d.get_result_tags()[0])
+        except Exception:
+            hardmode_log.log_exception("picker: {}".format(title))
+
+    dialog.add_listener(on_response)
+    dialog.show_dialog()
+
+
 def tag_names(tags):
     """Game Tag values -> their tuning names (e.g. 'Func_Painting')."""
     names = []

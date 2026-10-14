@@ -1,6 +1,6 @@
 # Scenarios
 
-**Status:** planning · **Type:** script (phase 3 adds a build tool that makes tuning) · **Size:** medium to large
+**Status:** phase 1 (files and goals) built 2026-10-14, to test (TESTING.md section 6); rules (phase 2) are read but not enforced. Choices made while building: relationship goals use score thresholds (friend 30, good friend 60, best friend 90, partner 50 romance, married = has a spouse) rather than the game's bits; rewards are money, a trait and a notification (moodlets and satisfaction points later); start conditions don't join careers yet; `who` is active/any/all (roles later); collection goals later · **Type:** script (phase 3 adds a build tool that makes tuning) · **Size:** medium to large
 
 ## Goal
 

@@ -2,7 +2,9 @@
 sims/careers into the plain names and numbers used here.
 
 Rule (Amber, 2026-10-09): to newly join a gated full-time career a sim needs the career's
-minimum skills, UNLESS they have finished a degree that waives it. Sims already in the
+minimum skills, UNLESS they have finished a degree that waives it. Since 2026-10-14 ANY
+finished degree waives every gate (ANY_DEGREE_UNLOCKS_ALL); the per-career degrees in GATES
+are kept so that can be switched back. Sims already in the
 career are never blocked (grandfathered), and careers not in GATES aren't gated at all.
 
 Names are matched against the game's tuning names in hardmode_main.py:
@@ -13,6 +15,9 @@ Names are matched against the game's tuning names in hardmode_main.py:
 """
 
 ANY_DEGREE = "*"
+
+# Amber, 2026-10-14: "any degree unlocks all careers". False = only the degrees in GATES.
+ANY_DEGREE_UNLOCKS_ALL = True
 
 # career key -> (requirements, degrees that waive them)
 # requirements: a list of groups that must ALL be met; each group is a list of
@@ -63,7 +68,7 @@ def degree_waives(gate_key, finished_degree_names):
     """True if one of the finished degrees (tuning names) waives this career's skill gate."""
     waivers = GATES[gate_key][1]
     names = [d.lower().replace("_", "") for d in finished_degree_names]
-    if ANY_DEGREE in waivers:
+    if ANY_DEGREE_UNLOCKS_ALL or ANY_DEGREE in waivers:
         return bool(names)
     return any(w in n for w in waivers for n in names)
 
@@ -98,5 +103,6 @@ def check_join(career_name, is_full_time, skill_levels, finished_degree_names,
         return False, "a finished degree waives the skill gate"
     missing = missing_skills(gate_key, skill_levels)
     if missing:
-        return True, "needs " + "; ".join(missing) + " - or a relevant degree"
+        return True, "needs " + "; ".join(missing) + (" - or any finished degree" if ANY_DEGREE_UNLOCKS_ALL
+                                                    else " - or a relevant degree")
     return False, "skill requirements met"

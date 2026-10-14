@@ -7,7 +7,10 @@ nothing is built if a test fails.
 
 For each folder in mods/ (or only the ones named):
   mods/<name>/scripts/**.py   -> compiled and zipped into build/<creator>_<name>.ts4script
+  mods/<name>/tuning/*.xml      -> build/<creator>_<name>.package (see tuning.py)
   mods/<name>/package/*.package -> copied as-is (made in Sims 4 Studio)
+  mods/<name>/install/**        -> copied into Mods/<creator>/ as they are (e.g. example
+                                   scenario files; same-named files there are overwritten)
 Then everything is copied to Mods/<creator>/ unless --no-install is given.
 Script files may sit at most one folder deep inside Mods, which is why we use one flat folder.
 """
@@ -21,6 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402
+import tuning  # noqa: E402
 
 
 def build_scripts(mod_dir, out_file):
@@ -67,6 +71,9 @@ def main(argv):
         script_out = config.BUILD_DIR / (base + ".ts4script")
         if build_scripts(mod_dir, script_out):
             built.append(script_out)
+        package_out = config.BUILD_DIR / (base + ".package")
+        if tuning.build_package(mod_dir, package_out, base):
+            built.append(package_out)
         for pkg in sorted((mod_dir / "package").glob("*.package")):
             out = config.BUILD_DIR / "{}_{}".format(base, pkg.name)
             shutil.copy2(pkg, out)
@@ -83,6 +90,13 @@ def main(argv):
         dest.mkdir(parents=True, exist_ok=True)
         for f in built:
             shutil.copy2(f, dest / f.name)
+        for mod_dir in mod_dirs:
+            extra = mod_dir / "install"
+            for f in sorted(p for p in extra.rglob("*") if p.is_file()):
+                target = dest / f.relative_to(extra)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, target)
+                print("installed", target.relative_to(dest))
         print("installed to", dest)
         print("Make sure Script Mods are enabled in Game Options > Other, then restart the game.")
 

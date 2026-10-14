@@ -1,3 +1,4 @@
+import hardmode_careers
 from hardmode_careers import (GATES, ALL_SKILLS, gate_for_career, degree_waives,
                               missing_skills, check_join)
 
@@ -56,7 +57,16 @@ def test_any_alternative_in_a_group_is_enough():
     assert missing_skills("education", {"Charisma": 2}) == []
 
 
-def test_degree_waivers():
+def test_any_degree_unlocks_all_careers():
+    assert degree_waives("doctor", ["degree_Drama"])
+    assert degree_waives("athlet", ["degree_Biology"])
+    assert not degree_waives("doctor", [])
+    assert check_join("astronaut", True, {}, ["degree_Drama"], False)[0] is False
+    assert "any finished degree" in check_join("astronaut", True, {}, [], False)[1]
+
+
+def test_degree_waivers_per_career(monkeypatch):
+    monkeypatch.setattr(hardmode_careers, "ANY_DEGREE_UNLOCKS_ALL", False)
     assert degree_waives("doctor", ["degree_Biology"])
     assert not degree_waives("doctor", ["degree_Drama"])
     assert degree_waives("techguru", ["Degree_Computer_Science"])
@@ -79,7 +89,8 @@ def test_allows_with_matching_degree_even_without_skills():
     assert check_join("astronaut", True, {}, ["degree_Physics"], False)[0] is False
 
 
-def test_wrong_degree_does_not_waive():
+def test_wrong_degree_does_not_waive_per_career(monkeypatch):
+    monkeypatch.setattr(hardmode_careers, "ANY_DEGREE_UNLOCKS_ALL", False)
     assert check_join("astronaut", True, {}, ["degree_Drama"], False)[0] is True
 
 

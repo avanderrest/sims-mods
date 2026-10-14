@@ -2,7 +2,8 @@ import pytest
 
 from hardmode_money import (DEBT_LATE_FEE, KIND_MULTIPLIERS, SATURATION_FLOOR, MarketLedger, bill_to_debt,
                             credit_limit, daily_debt_step, household_size_bill_factor, item_kind, markup_curve,
-                            markup_satisfaction_factor, markup_scale, sell_multiplier, starting_funds_cut)
+                            markup_satisfaction_factor, markup_scale, repay_debt, repay_options, sell_multiplier,
+                            starting_funds_cut)
 
 
 # --- item kinds (tag names as they appear in the game's tuning) ---
@@ -160,3 +161,22 @@ def test_starting_funds_cut():
     assert starting_funds_cut(3000, 10000) == 3000  # spent most on a lot: never below 0
     assert starting_funds_cut(20000, 20000) == 0
     assert starting_funds_cut(20000, 0) == 20000
+
+
+def test_repay_options_are_affordable_steps_then_the_most_possible():
+    assert repay_options(3000, funds=20000) == [100, 500, 1000, 3000]
+    assert repay_options(3000, funds=700) == [100, 500, 700]
+    assert repay_options(80, funds=1000) == [80]
+
+
+def test_repay_options_empty_without_debt_or_money():
+    assert repay_options(0, 1000) == []
+    assert repay_options(1000, 0) == []
+    assert repay_options(1000, -5) == []
+
+
+def test_repay_debt_never_pays_more_than_owed_or_owned():
+    assert repay_debt(1000, 5000, 400) == (600, 400)
+    assert repay_debt(1000, 5000, 9999) == (0, 1000)
+    assert repay_debt(1000, 300, 1000) == (700, 300)
+    assert repay_debt(1000, 5000, -10) == (1000, 0)

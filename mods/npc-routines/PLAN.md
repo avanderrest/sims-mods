@@ -1,6 +1,6 @@
 # NPC Routines (with optional local-LLM brain)
 
-**Status:** phase 1 works in game; phase 2 (editor via `routine.edit` dialogs - a pie-menu entry still needs a .package), phase 3 (off-lot skill gain) and phase 4 (local LLM, `npc_llm.py`) built 2026-10-09, to test · **Type:** script mod (`.ts4script`) plus a little tuning · **Size:** large; build in phases
+**Status:** phase 1 works in game; phase 2 (editor via `routine.edit` dialogs - a pie-menu entry still needs a .package), phase 3 (off-lot skill gain) and phase 4 (local LLM, `npc_llm.py`) built 2026-10-09, to test. 13 Oct test: `routine.edit` crashed in the picker (`_MaxSelectableStatic` built without `exclude_previously_selected`; fixed 2026-10-14); the LLM was never reached because no server was running, so `start-llm.cmd` / `tools/llm.py` + `llm.json` now install and start one. A pie-menu entry can now be made without Sims 4 Studio (`tools/tuning.py`, first used for Hard Mode's phone entry) · **Type:** script mod (`.ts4script`) plus a little tuning · **Size:** large; build in phases
 
 ## Goal
 

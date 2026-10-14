@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Phone > "Pay Off Debt" (Amber, 2026-10-14: "like with university loan").
+     Modelled on EA's toggle_phone_silence (also a CommandSuperInteraction on the phone): the
+     game runs the command with the sim's id, and hardmode_money_main.py opens the amount picker.
+     It's added to the phone menu by script, only while the household has Hard Mode debt.
+     s = fnv64("BlueRabbit477_HardMode_PayOffDebt") with the high bit set; PAY_DEBT_AFFORDANCE_ID
+     in hardmode_money_main.py must match. -->
+<I c="CommandSuperInteraction" i="interaction" m="interactions.base.immediate_interaction" n="BlueRabbit477_HardMode_PayOffDebt" s="17635194557068363251">
+  <T n="command">bluerabbit477.hard.money.pay_debt_phone</T>
+  <T n="display_name">{{string:Pay Off Debt}}</T>
+  <T n="pie_menu_icon">2f7d0004:00000000:25eea5cdba6a6fd6</T>
+  <T n="pie_menu_priority">1</T>
+  <E n="target_type">OBJECT</E>
+</I>

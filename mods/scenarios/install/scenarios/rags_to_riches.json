@@ -1,0 +1,26 @@
+{
+  "name": "Rags to Riches",
+  "description": "Start with nothing and no job. Paint your way to a fortune and a proper home.",
+  "start": {
+    "money": 0,
+    "traits": {"active": ["trait_Ambitious"]},
+    "skills": {"active": {"Painting": 2}},
+    "remove_careers": true
+  },
+  "rules": [
+    {"type": "no_career", "penalty": {"type": "warning"}}
+  ],
+  "goals": [
+    {"id": "art", "type": "skill", "skill": "Painting", "level": 6, "who": "active",
+     "reward": {"money": 1000, "notification": "Your paintings start to sell for real money."}},
+    {"id": "rich", "type": "household_money", "amount": 50000},
+    {"id": "home", "type": "home_value", "amount": 100000, "requires": ["rich"],
+     "description": "Turn that money into a home worth §100,000"}
+  ],
+  "deadline_days": 28,
+  "win": "all_goals",
+  "outcomes": {
+    "win": {"notification": "From nothing to a fortune!", "money": 10000},
+    "lose": {"notification": "Time's up. Maybe next generation."}
+  }
+}

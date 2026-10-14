@@ -11,7 +11,7 @@ Each part can be switched on or off (Challenge-Junkie does this through the mail
 ## What players say is too easy → what we change
 
 ### 1. Careers (first priority; closest to the original idea)
-- **Entry requirements: skills *or* a degree** (Amber, 2026-10-09). To join a full-time career, a sim needs the career's minimum skill levels, **unless they have a relevant degree**, which waives the skill gate. So there are two routes in: study, or teach yourself. These are **entry gates only**: they decide who can start a career at level 1, so they're low, about level 2 in the main skill (Amber, 2026-10-09). Moving up is left to the game's own promotion requirements. Current numbers (in `hardmode_careers.py`):
+- **Entry requirements: skills *or* a degree** (Amber, 2026-10-09). To join a full-time career, a sim needs the career's minimum skill levels, **unless they have finished a degree**, which waives the skill gate. Originally only a relevant degree counted (table below); **since 2026-10-14 any finished degree unlocks every career** (Amber: "any degree unlocks all careers"; `ANY_DEGREE_UNLOCKS_ALL` in `hardmode_careers.py`, set it to False to go back to the table). So there are two routes in: study, or teach yourself. These are **entry gates only**: they decide who can start a career at level 1, so they're low, about level 2 in the main skill (Amber, 2026-10-09). Moving up is left to the game's own promotion requirements. Current numbers (in `hardmode_careers.py`):
 
   | Career | Skill gate (without a degree) | Degree that waives it |
   |---|---|---|
@@ -93,7 +93,7 @@ Each part can be switched on or off (Challenge-Junkie does this through the mail
 - Smaller starting funds (setting: 20k / 10k / 5k / 0).
 - Bills that scale more realistically with the household's size and the home's value. A rent-like housing cost for households without their own home.
 - Book royalties and other passive income get the same "market fills up" treatment, so they're worth less when lots arrive in a short time.
-- **Debt** instead of "can't pay, so the power goes off": unpaid bills build up debt with interest. Too much debt means a credit score that blocks buying a house or setting up a business, and eventually repossession. (Script.)
+- **Debt** instead of "can't pay, so the power goes off": unpaid bills build up debt with interest. **Paying it off early from the phone** like a university loan (Amber, 2026-10-14; built that day): while there's debt the phone shows *Pay Off Debt*, which opens a list of amounts. The phone entry is real tuning (`tuning/PayOffDebt.xml`, a `CommandSuperInteraction` modelled on EA's phone-silence button) compiled into `BlueRabbit477_hard-mode.package` by `tools/tuning.py`; the script adds it to the phone menu only while the household has debt. Cheat fallback: `bluerabbit477.hard.money.pay_debt [amount]`. Too much debt means a credit score that blocks buying a house or setting up a business, and eventually repossession. (Script.)
 
 ### 3. Skills
 - **Aptitude:** traits give each sim a skill ceiling or a speed multiplier. For example, a Bookworm sim levels Writing faster, and a sim without a relevant trait slows down past level 7. Each sim gets 1–2 random "talents" at young adult.

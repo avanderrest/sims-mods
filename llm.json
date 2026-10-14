@@ -1,0 +1,16 @@
+{
+  "_comment": "The local LLM that NPC Routines' brain talks to - like package.json, for tools/llm.py. Pick a backend, then: py tools/llm.py install (once), py tools/llm.py start (each time you play).",
+  "backend": "ollama",
+  "backends": {
+    "ollama": {
+      "winget": "Ollama.Ollama",
+      "url": "http://localhost:11434/api/generate",
+      "model": "llama3.2"
+    },
+    "lmstudio": {
+      "winget": "ElementLabs.LMStudio",
+      "url": "http://localhost:1234/v1/chat/completions",
+      "model": "llama-3.2-3b-instruct"
+    }
+  }
+}

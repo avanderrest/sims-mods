@@ -20,18 +20,27 @@ Cheats:
   bluerabbit477.hard.money.status   - markup table, this household's market and debt
   bluerabbit477.hard.money.reset    - forget this household's sales history and debt
   bluerabbit477.hard.money.bill_to_debt - for testing: turn the unpaid bill into debt now
+  bluerabbit477.hard.money.pay_debt [amount] - pay debt off early; no amount opens a picker
+
+Phone: "Pay Off Debt" (tuning/PayOffDebt.xml, built into BlueRabbit477_hard-mode.package) is
+added to Sim.potential_phone_interactions while the household has debt; it runs
+bluerabbit477.hard.money.pay_debt_phone, which opens the same picker.
 """
 import alarms
 import services
 import sims4.commands
+import sims4.resources
 from date_and_time import create_time_span
 from protocolbuffers import Consts_pb2
+from server_commands.argument_helpers import OptionalTargetParam, get_optional_target
 
 import hardmode_log
 import hardmode_state
 from hardmode_money import (MarketLedger, bill_to_debt, credit_limit, daily_debt_step,
                             household_size_bill_factor, item_kind, markup_curve, markup_satisfaction_factor,
-                            markup_scale, sell_multiplier, starting_funds_cut)
+                            markup_scale, repay_debt, repay_options, sell_multiplier, starting_funds_cut)
+
+PAY_DEBT_AFFORDANCE_ID = 17635194557068363251   # s= in tuning/PayOffDebt.xml
 
 _LEDGER_FILE = "hard_mode_market.json"
 _DEBT_FILE = "hard_mode_debt.json"   # {household_id: debt}
@@ -379,6 +388,59 @@ def _debt_day():
         hardmode_log.log_exception("daily debt step")
 
 
+def pay_debt(household, amount):
+    """Pays debt off early from household funds. Returns (paid, debt left)."""
+    debts = _get_debts()
+    debt = debts.get(str(household.id), 0)
+    new_debt, paid = repay_debt(debt, household.funds.money, amount)
+    if paid and not household.funds.try_remove(paid, Consts_pb2.TELEMETRY_INTERACTION_COST, None):
+        return 0, debt
+    debts[str(household.id)] = new_debt
+    hardmode_state.save_json(_DEBT_FILE, debts)
+    hardmode_log.log("paid debt early: household {} paid {}, debt {} -> {}".format(household.id, paid, debt, new_debt))
+    return paid, new_debt
+
+
+def open_pay_debt_picker(sim_info):
+    household = sim_info.household
+    debt = _get_debts().get(str(household.id), 0)
+    options = repay_options(debt, household.funds.money)
+    if not options:
+        hardmode_state.notify("Pay off debt", "The {} household has no debt to pay off.".format(household.name)
+                              if debt <= 0 else "You owe §{}, but there's no money to pay with.".format(debt))
+        return
+    labels = [("Pay §{}{}".format(a, " (all of it)" if a == debt else ""), a) for a in options]
+
+    def chosen(amount):
+        paid, left = pay_debt(household, amount)
+        hardmode_state.notify("Debt paid", "Paid §{}. {}".format(
+            paid, "The debt is paid off!" if left == 0 else "Still owed: §{}.".format(left)))
+
+    hardmode_state.pick(sim_info, "Pay off debt", "The {} household owes §{} and has §{}. How much do you want to pay?"
+                        .format(household.name, debt, household.funds.money), labels, chosen)
+
+
+def _wrap_phone():
+    from sims.sim import Sim
+    original = Sim.potential_phone_interactions
+
+    def potential_phone_interactions(self, context, **kwargs):
+        yield from original(self, context, **kwargs)
+        try:
+            household = self.household
+            if not hardmode_state.setting("debt") or household is None                     or _get_debts().get(str(household.id), 0) <= 0:
+                return
+            affordance = services.get_instance_manager(sims4.resources.Types.INTERACTION).get(PAY_DEBT_AFFORDANCE_ID)
+            if affordance is None:
+                hardmode_log.log("phone: Pay Off Debt tuning not loaded (is BlueRabbit477_hard-mode.package installed?)")
+                return
+            yield from affordance.potential_interactions(self, context, **kwargs)
+        except Exception:
+            hardmode_log.log_exception("adding Pay Off Debt to the phone")
+
+    Sim.potential_phone_interactions = potential_phone_interactions
+
+
 # --- Starting funds --------------------------------------------------------------------
 def _apply_starting_funds():
     household = services.active_household()
@@ -406,7 +468,7 @@ def _install_once():
         return
     _installed = True
     for name, fn in (("sell price", _wrap_sell_modifier), ("funds", _wrap_funds), ("loot ops", _wrap_loot_ops),
-                     ("business", _wrap_business), ("bills", _wrap_bills)):
+                     ("business", _wrap_business), ("bills", _wrap_bills), ("phone", _wrap_phone)):
         try:
             fn()
         except Exception:
@@ -467,6 +529,36 @@ def money_bill_to_debt(_connection=None):
         output("Failed - see the log.")
         return
     output("Bill moved to debt." if moved else "Not moved (over the credit limit - see the notification).")
+
+
+@sims4.commands.Command("bluerabbit477.hard.money.pay_debt", command_type=sims4.commands.CommandType.Live)
+def money_pay_debt(amount: int = None, _connection=None):
+    output = sims4.commands.CheatOutput(_connection)
+    sim_info = services.active_sim_info()
+    if sim_info is None or sim_info.household is None:
+        output("No active sim.")
+        return
+    try:
+        if amount is None:
+            open_pay_debt_picker(sim_info)
+            return
+        paid, left = pay_debt(sim_info.household, amount)
+        output("Paid §{}; debt left §{}.".format(paid, left))
+    except Exception:
+        hardmode_log.log_exception("hard.money.pay_debt")
+        output("Failed - see the log.")
+
+
+@sims4.commands.Command("bluerabbit477.hard.money.pay_debt_phone", command_type=sims4.commands.CommandType.Live)
+def money_pay_debt_phone(opt_sim: OptionalTargetParam = None, _interaction_id: float = None, _connection=None):
+    """Run by the phone's Pay Off Debt with the sim's id (and, like EA's, maybe an interaction id)."""
+    try:
+        sim = get_optional_target(opt_sim, _connection)
+        sim_info = getattr(sim, "sim_info", sim) or services.active_sim_info()
+        hardmode_log.log("phone: Pay Off Debt for {}".format(hardmode_state.sim_name(sim_info)))
+        open_pay_debt_picker(sim_info)
+    except Exception:
+        hardmode_log.log_exception("hard.money.pay_debt_phone")
 
 
 @sims4.commands.Command("bluerabbit477.hard.money.reset", command_type=sims4.commands.CommandType.Live)

@@ -204,6 +204,26 @@ def daily_debt_step(debt, funds):
     return (int(round(debt)) if debt >= 1 else 0), payment
 
 
+REPAY_STEPS = (100, 500, 1000, 5000, 10000)
+
+
+def repay_options(debt, funds):
+    """Amounts offered when the player pays debt off early (from the phone, like a university
+    loan): the round steps they can afford that are below the debt, then everything they can
+    afford (the whole debt if they have it). Empty if there's no debt or no money."""
+    most = min(debt, max(0, int(funds)))
+    if most <= 0:
+        return []
+    return [step for step in REPAY_STEPS if step < most] + [most]
+
+
+def repay_debt(debt, funds, amount):
+    """Pays `amount` off the debt, limited to the debt and to what the household has.
+    Returns (new_debt, paid)."""
+    paid = max(0, min(int(amount), debt, int(funds)))
+    return debt - paid, paid
+
+
 # --- Starting funds -------------------------------------------------------------------
 GAME_STARTING_FUNDS = 20000
 

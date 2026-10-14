@@ -9,7 +9,7 @@ Functional (gameplay) mods for The Sims 4.
 | Hard Mode | [PLAN](mods/hard-mode/PLAN.md) | career gates work in game; money, firing, skills, life built, to test |
 | Social Standing | [PLAN](mods/social-standing/PLAN.md) | built, to test |
 | Aspiration Progress | [PLAN](mods/aspiration-progress/PLAN.md) | built, to test |
-| Scenarios | [PLAN](mods/scenarios/PLAN.md) | planning |
+| Scenarios | [PLAN](mods/scenarios/PLAN.md) | phase 1 (files and goals) built, to test |
 | hello-world | `mods/hello-world/` | pipeline test, working |
 
 **First time testing any of this?** Go through [TESTING.md](TESTING.md) in order — it has the
@@ -20,11 +20,15 @@ running game overnight and haven't been checked against the real thing yet.
 
 ```
 mods/<name>/scripts/   Python source  -> compiled into <creator>_<name>.ts4script
+mods/<name>/tuning/    tuning XML compiled into <creator>_<name>.package by the build
 mods/<name>/package/   .package files made in Sims 4 Studio (tuning, strings)
 mods/<name>/tests/     pytest tests for scripts/ that have no game imports (pure logic)
 mods/<name>/PLAN.md    design and status
 tools/                 decompile and build scripts (config in tools/config.py)
-tools/dbpf.py          reads the game's .package files (real tuning names: tags, traits, buffs)
+tools/dbpf.py          reads the game's .package files (real tuning names: tags, traits, buffs), writes ours
+tools/tuning.py        mods/<name>/tuning/*.xml -> <creator>_<name>.package (pie-menu/phone entries; run by build.py)
+tools/llm.py           installs/starts the local LLM for NPC Routines' brain, as declared in llm.json
+start-llm.cmd          double-click before playing: installs Ollama + model the first time, then starts it
 tools/pyc_outline.py   outlines an EA .pyc the decompilers couldn't recover
 tools/templates/       mod_log_template.py - copy into a new mod as scripts/<mod>_log.py
 ea_scripts/            EA's decompiled game code, for reading only (git-ignored)

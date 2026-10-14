@@ -40,7 +40,10 @@ def _pick(sim_info, title, text, options, callback, multi=False):
         text=lambda *_, **__: _raw(text),
         title=lambda *_, **__: _raw(title),
         min_selectable=1,
-        max_selectable=UiDialogObjectPicker._MaxSelectableStatic(number_selectable=len(options) if multi else 1),
+        # Built directly, not from tuning, so every field must be given: AutoFactoryInit fills in
+        # only what's passed (exclude_previously_selected missing crashed the picker, 2026-10-13).
+        max_selectable=UiDialogObjectPicker._MaxSelectableStatic(
+            number_selectable=len(options) if multi else 1, exclude_previously_selected=False),
         is_sortable=False,
         picker_type=UiObjectPicker.UiObjectPickerObjectPickerType.OBJECT)
     for i, (label, value) in enumerate(options):

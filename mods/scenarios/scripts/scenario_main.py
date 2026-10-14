@@ -1,0 +1,513 @@
+"""Scenarios - game layer (phase 1: files and goals). The rules are in scenario_logic.py.
+
+Scenario files: Mods/BlueRabbit477/scenarios/<name>.json (examples are installed there by the
+build; edit or add files without rebuilding). Progress per household:
+Mods/BlueRabbit477/data/scenarios_progress.json.
+
+Every sim hour (and right after starting, and on scenario.status) the household is read into a
+plain "facts" dict and scenario_logic.evaluate() decides which goals are done and whether the
+scenario is won or lost. Rewards and outcomes are applied here.
+
+Cheats:
+  bluerabbit477.scenario.list              - scenario files found
+  bluerabbit477.scenario.validate <name>   - check a file (and every trait/skill name in it)
+  bluerabbit477.scenario.start <name>      - start it for the active household, with the
+                                             selected sim as the "active" sim
+  bluerabbit477.scenario.status            - goals done/open with numbers, days left
+  bluerabbit477.scenario.check <goal>      - tick a custom goal by hand
+  bluerabbit477.scenario.quit
+"""
+import json
+import os
+
+import alarms
+import services
+import sims4.commands
+import sims4.resources
+import zone as zone_module
+from date_and_time import create_time_span
+from protocolbuffers import Consts_pb2
+
+import scenario_log
+from scenario_logic import ScenarioError, describe_goal, evaluate, goal_by_id, new_progress, open_goals, parse
+
+_ROOT = os.path.join(os.path.expanduser("~"), "Documents", "Electronic Arts", "The Sims 4", "Mods", "BlueRabbit477")
+SCENARIO_DIR = os.path.join(_ROOT, "scenarios")
+_PROGRESS_PATH = os.path.join(_ROOT, "data", "scenarios_progress.json")
+
+_progress = None      # {household_id: progress dict}
+_alarm_handle = None
+_CHILD_AGES = ("BABY", "INFANT", "TODDLER", "CHILD")
+
+
+# --- Files ---------------------------------------------------------------------------
+
+def scenario_files():
+    try:
+        return sorted(f[:-5] for f in os.listdir(SCENARIO_DIR) if f.lower().endswith(".json"))
+    except OSError:
+        return []
+
+
+def load_scenario(name):
+    """Returns (scenario, warnings); raises ScenarioError if missing or broken."""
+    path = os.path.join(SCENARIO_DIR, name if name.lower().endswith(".json") else name + ".json")
+    if not os.path.exists(path):
+        raise ScenarioError("no file {} (have: {})".format(path, ", ".join(scenario_files()) or "none"))
+    with open(path, "r", encoding="utf-8") as f:
+        return parse(f.read())
+
+
+def _all_progress():
+    global _progress
+    if _progress is None:
+        _progress = {}
+        try:
+            if os.path.exists(_PROGRESS_PATH):
+                with open(_PROGRESS_PATH, "r", encoding="utf-8") as f:
+                    _progress = json.load(f)
+        except Exception:
+            scenario_log.log_exception("loading scenarios_progress.json")
+    return _progress
+
+
+def _save_progress():
+    try:
+        os.makedirs(os.path.dirname(_PROGRESS_PATH), exist_ok=True)
+        tmp = _PROGRESS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(_all_progress(), f, indent=1)
+        os.replace(tmp, _PROGRESS_PATH)
+    except Exception:
+        scenario_log.log_exception("saving scenarios_progress.json")
+
+
+def _current(household):
+    """(progress, scenario) for this household's running scenario, or (None, None)."""
+    progress = _all_progress().get(str(household.id))
+    if progress is None:
+        return None, None
+    try:
+        scenario, _ = load_scenario(progress["scenario"])
+    except Exception as e:
+        scenario_log.log("household {}: can't load its scenario {}: {}".format(household.id, progress["scenario"], e),
+                         level="WARN")
+        return progress, None
+    return progress, scenario
+
+
+# --- Game names ----------------------------------------------------------------------
+
+def _find(types, name, prefer=None):
+    """A tuning class by name: exact (any case) first, else the one whose name ends with
+    _<name>, preferring names containing `prefer` (e.g. adult skills over child ones)."""
+    want = name.lower()
+    ends = []
+    for cls in types:
+        cname = cls.__name__.lower()
+        if cname == want:
+            return cls
+        if cname.endswith("_" + want):
+            ends.append(cls)
+    if prefer:
+        ends.sort(key=lambda c: prefer not in c.__name__.lower())
+    return ends[0] if ends else None
+
+
+def find_trait(name):
+    return _find(services.get_instance_manager(sims4.resources.Types.TRAIT).types.values(), name)
+
+
+def find_skill(name):
+    stats = [c for c in services.get_instance_manager(sims4.resources.Types.STATISTIC).types.values()
+             if "skill" in c.__name__.lower()]
+    return _find(stats, name, prefer="adult")
+
+
+def _skill_short_name(cls):
+    return cls.__name__.rsplit("_", 1)[-1]
+
+
+def unknown_names(scenario):
+    """Trait and skill names in the file that the game doesn't have (packs not owned, typos)."""
+    traits, skills = set(), set()
+    start = scenario.get("start", {})
+    for key in ("traits", "remove_traits"):
+        for names in (start.get(key) or {}).values():
+            traits.update(names)
+    for levels in (start.get("skills") or {}).values():
+        skills.update(levels)
+    for goal in scenario["goals"]:
+        if goal["type"] == "skill":
+            skills.add(goal["skill"])
+        for reward in (goal.get("reward") or {},):
+            if reward.get("trait"):
+                traits.add(reward["trait"])
+    for outcome_ in (scenario.get("outcomes") or {}).values():
+        if outcome_ and outcome_.get("trait"):
+            traits.add(outcome_["trait"])
+    return ([t for t in sorted(traits) if find_trait(t) is None],
+            [s for s in sorted(skills) if find_skill(s) is None])
+
+
+# --- Reading the household ------------------------------------------------------------
+
+def _sim_facts(sim_info, tracks):
+    facts = {"skills": {}, "careers": [], "friendship": 0, "romance": 0, "married": False, "aspirations": []}
+    try:
+        facts["skills"] = {_skill_short_name(type(s)): int(s.get_user_value()) for s in sim_info.all_skills()}
+    except Exception:
+        scenario_log.log_exception("reading skills")
+    try:
+        facts["careers"] = [[type(c).__name__, int(c.user_level)] for c in sim_info.career_tracker.careers.values()]
+    except Exception:
+        scenario_log.log_exception("reading careers")
+    try:
+        from relationships.relationship_track import RelationshipTrack
+        service = services.relationship_service()
+        for target_id in sim_info.relationship_tracker.target_sim_gen():
+            for key, track in (("friendship", RelationshipTrack.FRIENDSHIP_TRACK),
+                               ("romance", RelationshipTrack.ROMANCE_TRACK)):
+                score = service.get_relationship_score(sim_info.sim_id, target_id, track=track) or 0
+                facts[key] = max(facts[key], score)
+        facts["married"] = sim_info.spouse_sim_id is not None
+    except Exception:
+        scenario_log.log_exception("reading relationships")
+    try:
+        tracker = sim_info.aspiration_tracker
+        if tracker is not None:
+            for track, levels in tracks:
+                if levels and all(tracker.milestone_completed(level) for level in levels):
+                    facts["aspirations"].append(track.__name__)
+    except Exception:
+        scenario_log.log_exception("reading aspirations")
+    return facts
+
+
+def read_facts(household, progress):
+    tracks = []
+    try:
+        for track in services.get_instance_manager(sims4.resources.Types.ASPIRATION_TRACK).types.values():
+            tracks.append((track, [level for _, level in (track.get_aspirations() or ())]))
+    except Exception:
+        scenario_log.log_exception("listing aspiration tracks")
+    members = list(household.sim_info_gen())
+    children = sum(1 for s in members if getattr(getattr(s, "age", None), "name", "") in _CHILD_AGES)
+    return {
+        "day": services.time_service().sim_now.absolute_days() - progress["start_day"],
+        "money": household.funds.money,
+        "home_value": household.get_home_lot_value() or 0,
+        "household_size": len(members),
+        "children": children,
+        "active": progress.get("active"),
+        "sims": {s.sim_id: _sim_facts(s, tracks) for s in members},
+    }
+
+
+# --- Applying things -----------------------------------------------------------------
+
+def notify(title, text):
+    try:
+        from sims4.localization import LocalizationHelperTuning
+        from ui.ui_dialog_notification import UiDialogNotification
+        raw = LocalizationHelperTuning.get_raw_text
+        dialog = UiDialogNotification.TunableFactory().default(
+            services.active_sim_info(), title=lambda *_, **__: raw(title), text=lambda *_, **__: raw(text))
+        dialog.show_dialog()
+    except Exception:
+        scenario_log.log_exception("showing notification")
+
+
+def _change_money(household, amount):
+    amount = int(amount)
+    if amount > 0:
+        household.funds.add(amount, Consts_pb2.TELEMETRY_INTERACTION_REWARD, None)
+    elif amount < 0:
+        household.funds.try_remove(min(-amount, household.funds.money), Consts_pb2.TELEMETRY_INTERACTION_COST, None)
+
+
+def _sims_named(household, active_sim_info, key):
+    return list(household.sim_info_gen()) if key == "all" else [active_sim_info]
+
+
+def apply_start(scenario, household, active_sim_info):
+    start = scenario.get("start", {})
+    log = []
+    money = start.get("money")
+    if money is not None:
+        delta = money["add"] if isinstance(money, dict) else money - household.funds.money
+        _change_money(household, delta)
+        log.append("money {:+d}".format(int(delta)))
+    if start.get("remove_careers"):
+        for sim_info in household.sim_info_gen():
+            for uid in list(sim_info.career_tracker.careers):
+                sim_info.career_tracker.remove_career(uid, post_quit_msg=False)
+        log.append("careers removed")
+    for key, adding in (("remove_traits", False), ("traits", True)):
+        for who, names in (start.get(key) or {}).items():
+            for sim_info in _sims_named(household, active_sim_info, who):
+                for name in names:
+                    trait = find_trait(name)
+                    if trait is None:
+                        log.append("trait {} not found".format(name))
+                    elif adding and not sim_info.has_trait(trait):
+                        sim_info.add_trait(trait)
+                    elif not adding and sim_info.has_trait(trait):
+                        sim_info.remove_trait(trait)
+    for who, levels in (start.get("skills") or {}).items():
+        for sim_info in _sims_named(household, active_sim_info, who):
+            for name, level in levels.items():
+                skill = find_skill(name)
+                if skill is None:
+                    log.append("skill {} not found".format(name))
+                    continue
+                level = max(0, min(int(level), skill.max_level))
+                sim_info.get_statistic(skill, add=True).set_value(skill.convert_from_user_value(level))
+    scenario_log.log("start conditions for household {}: {}".format(household.id, "; ".join(log) or "none"))
+
+
+def apply_reward(reward, household, active_sim_info):
+    if not reward:
+        return []
+    said = []
+    if reward.get("money"):
+        _change_money(household, reward["money"])
+        said.append("§{:+d}".format(int(reward["money"])))
+    if reward.get("trait"):
+        trait = find_trait(reward["trait"])
+        if trait is not None and active_sim_info is not None:
+            active_sim_info.add_trait(trait)
+            said.append("trait {}".format(getattr(trait, "__name__", reward["trait"])))
+    if reward.get("notification"):
+        said.insert(0, reward["notification"])
+    return said
+
+
+def _active_sim_info(progress):
+    sim_info = services.sim_info_manager().get(progress.get("active")) if progress.get("active") else None
+    return sim_info or services.active_sim_info()
+
+
+def check(household, report=None):
+    """Evaluates the household's scenario once; applies rewards and the outcome."""
+    progress, scenario = _current(household)
+    if progress is None or scenario is None or progress.get("state") != "running":
+        return
+    facts = read_facts(household, progress)
+    newly, result = evaluate(scenario, progress, facts)
+    active = _active_sim_info(progress)
+    for gid in newly:
+        goal = goal_by_id(scenario, gid)
+        progress["done"].append(gid)
+        said = apply_reward(goal.get("reward"), household, active)
+        scenario_log.log("household {}: goal {} done ({})".format(household.id, gid, said))
+        unlocked = [g for g in open_goals(scenario, progress["done"]) if gid in g.get("requires", ())]
+        text = "Goal done: {}".format(describe_goal(goal))
+        if said:
+            text += "\nReward: " + ", ".join(said)
+        if unlocked:
+            text += "\nNew goal: " + "; ".join(describe_goal(g) for g in unlocked)
+        notify(scenario["name"], text)
+    if result is not None:
+        progress["state"] = result
+        said = apply_reward((scenario.get("outcomes") or {}).get("win" if result == "won" else "lose"),
+                            household, active)
+        scenario_log.log("household {}: scenario {} {} on day {:.1f}".format(household.id, scenario["name"], result,
+                                                                           facts["day"]))
+        notify(scenario["name"], ("You won!" if result == "won" else "Scenario lost: time's up.")
+               + ("\n" + ", ".join(said) if said else ""))
+    if newly or result:
+        _save_progress()
+    if report is not None:
+        report(progress, scenario, facts)
+
+
+def _tick(_handle=None):
+    try:
+        household = services.active_household()
+        if household is not None:
+            check(household)
+    except Exception:
+        scenario_log.log_exception("hourly scenario check")
+
+
+def _start_alarm(zone):
+    # Re-created on every zone load (owned by the current zone), as in npc_main.py.
+    global _alarm_handle
+    if _alarm_handle is not None:
+        try:
+            alarms.cancel_alarm(_alarm_handle)
+        except Exception:
+            pass
+    _alarm_handle = alarms.add_alarm(zone, create_time_span(hours=1), _tick, repeating=True)
+
+
+_original_on_loading_screen_animation_finished = zone_module.Zone.on_loading_screen_animation_finished
+
+
+def _patched_on_loading_screen_animation_finished(self, *args, **kwargs):
+    result = _original_on_loading_screen_animation_finished(self, *args, **kwargs)
+    try:
+        _start_alarm(self)
+    except Exception:
+        scenario_log.log_exception("zone load hook")
+    return result
+
+
+zone_module.Zone.on_loading_screen_animation_finished = _patched_on_loading_screen_animation_finished
+
+
+# --- Cheats --------------------------------------------------------------------------
+
+def _say(output, line):
+    output(line)
+    scenario_log.log(line)
+
+
+@sims4.commands.Command("bluerabbit477.scenario.list", command_type=sims4.commands.CommandType.Live)
+def scenario_list(_connection=None):
+    output = sims4.commands.CheatOutput(_connection)
+    names = scenario_files()
+    _say(output, "Scenarios in {}: {}".format(SCENARIO_DIR, ", ".join(names) if names else "none"))
+
+
+@sims4.commands.Command("bluerabbit477.scenario.validate", command_type=sims4.commands.CommandType.Live)
+def scenario_validate(name: str = None, _connection=None):
+    output = sims4.commands.CheatOutput(_connection)
+    if not name:
+        output("Usage: bluerabbit477.scenario.validate <name>  (see bluerabbit477.scenario.list)")
+        return
+    try:
+        scenario, warnings = load_scenario(name)
+        traits, skills = unknown_names(scenario)
+    except ScenarioError as e:
+        _say(output, "{}: NOT valid - {}".format(name, e))
+        return
+    except Exception:
+        scenario_log.log_exception("scenario.validate")
+        output("Failed - see the log.")
+        return
+    _say(output, "{}: valid, {} goals.".format(name, len(scenario["goals"])))
+    for w in warnings:
+        _say(output, "  note: " + w)
+    if traits:
+        _say(output, "  traits the game doesn't have: " + ", ".join(traits))
+    if skills:
+        _say(output, "  skills the game doesn't have: " + ", ".join(skills))
+
+
+@sims4.commands.Command("bluerabbit477.scenario.start", command_type=sims4.commands.CommandType.Live)
+def scenario_start(name: str = None, _connection=None):
+    output = sims4.commands.CheatOutput(_connection)
+    household = services.active_household()
+    active = services.active_sim_info()
+    if not name or household is None or active is None:
+        output("Usage: bluerabbit477.scenario.start <name>, with a sim selected (see bluerabbit477.scenario.list)")
+        return
+    try:
+        scenario, warnings = load_scenario(name)
+        running = _all_progress().get(str(household.id))
+        if running and running.get("state") == "running":
+            output("This household is already playing {}. bluerabbit477.scenario.quit first.".format(running["name"]))
+            return
+        today = services.time_service().sim_now.absolute_days()
+        progress = new_progress(scenario, name[:-5] if name.lower().endswith(".json") else name, today, active.sim_id)
+        apply_start(scenario, household, active)
+        _all_progress()[str(household.id)] = progress
+        _save_progress()
+        scenario_log.log("household {} started {} with {} as the active sim".format(
+            household.id, scenario["name"], active.sim_id))
+        lines = [scenario.get("description", "")] + ["Goals:"] + \
+                ["- " + describe_goal(g) for g in open_goals(scenario, [])]
+        if scenario.get("deadline_days"):
+            lines.append("You have {} days.".format(scenario["deadline_days"]))
+        notify(scenario["name"], "\n".join(l for l in lines if l))
+        for w in warnings:
+            _say(output, "note: " + w)
+        output("Started {}.".format(scenario["name"]))
+        check(household)
+    except ScenarioError as e:
+        _say(output, "{}: can't start - {}".format(name, e))
+    except Exception:
+        scenario_log.log_exception("scenario.start")
+        output("Failed - see the log.")
+
+
+@sims4.commands.Command("bluerabbit477.scenario.status", command_type=sims4.commands.CommandType.Live)
+def scenario_status(_connection=None):
+    output = sims4.commands.CheatOutput(_connection)
+    household = services.active_household()
+    if household is None:
+        output("No active household.")
+        return
+
+    def report(progress, scenario, facts):
+        _say(output, "{} ({}), day {:.1f}{}".format(
+            scenario["name"], progress["state"], facts["day"],
+            " of {}".format(scenario["deadline_days"]) if scenario.get("deadline_days") else ""))
+        done = progress["done"]
+        for goal in scenario["goals"]:
+            if goal["id"] in done:
+                _say(output, "  [x] " + describe_goal(goal))
+            elif goal in open_goals(scenario, done):
+                _say(output, "  [ ] " + describe_goal(goal, facts))
+            else:
+                _say(output, "  [locked] {} (after {})".format(goal["id"], ", ".join(goal.get("requires", ()))))
+        for rule in scenario.get("rules") or ():
+            _say(output, "  rule (not enforced yet): {}".format(rule.get("type")))
+
+    try:
+        progress, scenario = _current(household)
+        if progress is None:
+            output("No scenario running for this household. bluerabbit477.scenario.list shows what's there.")
+            return
+        if scenario is None:
+            output("This household's scenario file ({}) can't be loaded - see the log.".format(progress["scenario"]))
+            return
+        if progress["state"] == "running":
+            check(household, report)
+        else:
+            report(progress, scenario, read_facts(household, progress))
+    except Exception:
+        scenario_log.log_exception("scenario.status")
+        output("Failed - see the log.")
+
+
+@sims4.commands.Command("bluerabbit477.scenario.check", command_type=sims4.commands.CommandType.Live)
+def scenario_check(goal_id: str = None, _connection=None):
+    output = sims4.commands.CheatOutput(_connection)
+    household = services.active_household()
+    try:
+        progress, scenario = _current(household) if household is not None else (None, None)
+        if scenario is None or progress.get("state") != "running":
+            output("No scenario running.")
+            return
+        goal = goal_by_id(scenario, goal_id or "")
+        if goal is None or goal["type"] != "custom":
+            output("Only custom goals are ticked by hand: {}".format(
+                ", ".join(g["id"] for g in scenario["goals"] if g["type"] == "custom") or "this scenario has none"))
+            return
+        if goal_id not in [g["id"] for g in open_goals(scenario, progress["done"])]:
+            output("{} is already done or still locked.".format(goal_id))
+            return
+        progress["done"].append(goal_id)
+        said = apply_reward(goal.get("reward"), household, _active_sim_info(progress))
+        scenario_log.log("household {}: custom goal {} ticked ({})".format(household.id, goal_id, said))
+        _save_progress()
+        output("Ticked {}.{}".format(goal_id, " Reward: " + ", ".join(said) if said else ""))
+        check(household)   # unlocks what it required, and wins if it was the last goal
+    except Exception:
+        scenario_log.log_exception("scenario.check")
+        output("Failed - see the log.")
+
+
+@sims4.commands.Command("bluerabbit477.scenario.quit", command_type=sims4.commands.CommandType.Live)
+def scenario_quit(_connection=None):
+    output = sims4.commands.CheatOutput(_connection)
+    household = services.active_household()
+    if household is None or _all_progress().pop(str(household.id), None) is None:
+        output("No scenario to quit.")
+        return
+    _save_progress()
+    scenario_log.log("household {}: scenario quit".format(household.id))
+    output("Scenario stopped. Nothing it gave or took is undone.")

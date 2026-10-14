@@ -1,0 +1,13 @@
+{
+  "name": "Full House",
+  "description": "Marry, raise two children and keep the household afloat for a month.",
+  "goals": [
+    {"id": "married", "type": "relationship", "level": "married", "description": "Get married"},
+    {"id": "kids", "type": "household_size", "amount": 2, "children": true, "requires": ["married"],
+     "reward": {"money": 2000, "notification": "Grandma sends a gift."}},
+    {"id": "savings", "type": "household_money", "amount": 20000},
+    {"id": "month", "type": "day", "day": 28},
+    {"id": "holiday", "type": "custom", "description": "Take the whole family on holiday (tick it yourself)"}
+  ],
+  "outcomes": {"win": {"notification": "A full, happy house."}}
+}
