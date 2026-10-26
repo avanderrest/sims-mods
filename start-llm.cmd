@@ -14,7 +14,7 @@ if errorlevel 1 goto :no_python
 rem --- install once, then start ----------------------------------------------------------
 py -3 tools\llm.py status >nul 2>&1
 if errorlevel 1 (
-  echo The local model isn't ready yet - installing it now (a few GB the first time).
+  echo The local model isn't ready yet - installing it now ^(a few GB the first time^).
   py -3 tools\llm.py install || goto :failed
 )
 py -3 tools\llm.py start || goto :failed
