@@ -3,17 +3,17 @@ what's confirmed vs. guessed. The scheduling/data logic lives in npc_routine.py 
 pytest-tested; this file is the thin, defensive glue to the actual game.
 
 Cheats:
-  bluerabbit477.npc.on [sim_id]      - turn on routine mode for a sim (default: selected sim)
-  bluerabbit477.npc.off [sim_id]
-  bluerabbit477.routine.add <days> <start_hour> <length_hours> <activity> [sim_id]
+  houserules.npc.on [sim_id]      - turn on routine mode for a sim (default: selected sim)
+  houserules.npc.off [sim_id]
+  houserules.routine.add <days> <start_hour> <length_hours> <activity> [sim_id]
       days is comma-separated day names or numbers, e.g. "mon,wed,fri" or "1,3,5"
       (0=Sunday..6=Saturday, matching the game's own clock - see npc_routine.py)
-  bluerabbit477.routine.show [sim_id]
-  bluerabbit477.routine.clear [sim_id]
-  bluerabbit477.npc.tick                  - run the hourly check now, print what it decided
-  bluerabbit477.npc.find <text>           - list real interaction names containing <text>
-  bluerabbit477.npc.clubs <text>          - list club activities containing <text> and what they use
-  bluerabbit477.npc.try <activity|name> [sim_id] - push it on the sim now, print the result
+  houserules.routine.show [sim_id]
+  houserules.routine.clear [sim_id]
+  houserules.npc.tick                  - run the hourly check now, print what it decided
+  houserules.npc.find <text>           - list real interaction names containing <text>
+  houserules.npc.clubs <text>          - list club activities containing <text> and what they use
+  houserules.npc.try <activity|name> [sim_id] - push it on the sim now, print the result
 
 Everything that touches real tuning/interaction names (ACTIVITY_AFFORDANCES below) is a
 best guess - there was no running game tonight to check real affordance tuning names
@@ -40,12 +40,17 @@ from npc_offlot import ACTIVITY_SKILLS, offlot_points
 from npc_routine import ACTIVITIES, DAY_NAMES, RoutineEntry, RoutineStore
 
 _ROUTINES_PATH = os.path.join(os.path.expanduser("~"), "Documents", "Electronic Arts",
-                               "The Sims 4", "Mods", "BlueRabbit477", "data", "npc_routines.json")
+                               "The Sims 4", "Mods", "HouseRules", "data", "npc_routines.json")
 
 _store = RoutineStore()
 _npc_mode_sim_ids = set()
 _loaded = False
 _alarm_handle = None
+_zone = None
+_next_ask = {}          # sim id -> absolute day before which we do not ask again
+ASK_COOLDOWN_MINUTES = 30
+_poll_left = 0          # remaining answer-poll attempts
+_llm_error_notified = False
 
 # Real interaction tuning names, confirmed in-game (2026-10-09): workout, chess, jog and
 # autonomous_bookshelf_read_picker started; easel_Craft_Autonomously is what the easel offers.
@@ -217,7 +222,13 @@ def _resolve_sim_id(opt_sim, _connection):
 def _say(report, message, level="INFO"):
     npc_log.log(message, level=level)
     if report is not None:
-        report(message)
+        try:
+            report(message)
+        except Exception:
+            # Console output is cosmetic and can fail when the tick runs without a live
+            # client connection (e.g. a self-test invoking houserules.npc.tick) - the line
+            # is already in the log, so never let it break the tick.
+            pass
 
 
 def _push_activity(sim, activity, report=None):
@@ -242,8 +253,7 @@ def _push_activity(sim, activity, report=None):
         except Exception:
             npc_log.log_exception("pushing {!r} for activity {!r} on sim {}".format(
                 affordance_name, activity, getattr(sim, "id", "?")))
-            if report is not None:
-                report("  {}: error - see the log".format(affordance_name))
+            _say(report, "  {}: error - see the log".format(affordance_name), level="WARN")
     if activity in ACTIVITY_CLUB_HINTS and _push_from_club_groups(sim, activity, report):
         return True
     if activity in ACTIVITY_OBJECTS and _push_from_nearby_object(sim, activity, report):
@@ -318,9 +328,16 @@ def _run_tick(report=None):
         activity = routine.due_activity(day, hour)
         sim_info = sim_info_manager.get(sim_id)
         sim = sim_info.get_sim_instance() if sim_info is not None else None
+        # A goal makes the LLM decide the hour, even when a routine entry is due: the player
+        # asked for that sim to work towards the goal. Descriptions alone keep the old rule
+        # (the routine wins, the LLM only fills idle hours).
+        if sim is not None and npc_llm.goal_for(sim_id):
+            if _may_ask(sim_id, now):
+                _ask_llm(sim_info, report)
+            continue
         if activity is None:
             _say(report, "  sim {}: nothing due ({} routine entries)".format(sim_id, len(routine.entries)))
-            if sim is not None and npc_llm.instructions_for(sim_id):
+            if sim is not None and npc_llm.instructions_for(sim_id) and _may_ask(sim_id, now):
                 _ask_llm(sim_info, report)
             continue
         if sim is None:
@@ -426,24 +443,80 @@ def _describe(sim_info):
     return desc
 
 
+def _may_ask(sim_id, now):
+    """True when this sim may be sent to the LLM now (rate-limits the load-time and
+    answer-poll checks so they cannot ask in a loop)."""
+    due = _next_ask.get(sim_id, 0)
+    if float(now.absolute_days()) < due:
+        return False
+    _next_ask[sim_id] = float(now.absolute_days()) + ASK_COOLDOWN_MINUTES / 1440.0
+    return True
+
+
 def _ask_llm(sim_info, report):
     sim_id = sim_info.sim_id
     if npc_llm.is_pending(sim_id):
         _say(report, "  sim {}: waiting for the LLM's answer".format(sim_id))
         return
     try:
-        prompt, options = build_prompt(_describe(sim_info), npc_llm.instructions_for(sim_id), sorted(ACTIVITIES))
+        prompt, options = build_prompt(
+            _describe(sim_info), npc_llm.instructions_for(sim_id) or "(not given)",
+            sorted(ACTIVITIES), goal=npc_llm.goal_for(sim_id))
         npc_llm.ask(sim_id, prompt, options)
         npc_log.log("asked the LLM for sim {}:\n{}".format(sim_id, prompt))
         _say(report, "  sim {}: asked the LLM what to do".format(sim_id))
+        _schedule_answer_poll()
     except Exception:
         npc_log.log_exception("asking the LLM for sim {}".format(sim_id))
+
+
+def _ask_now(sim_info, report=None):
+    """Ask straight away (after a new goal/description), ignoring the rate limit."""
+    _next_ask.pop(sim_info.sim_id, None)
+    _ask_llm(sim_info, report)
+
+
+def _schedule_answer_poll(seconds=10, attempts=8):
+    """Apply the answer on the game's thread shortly after the request finishes, instead of
+    waiting up to an hour for the next tick. Retries while the request is still in flight."""
+    global _poll_left
+    _poll_left = max(_poll_left, attempts)
+    _add_poll_alarm(seconds)
+
+
+def _add_poll_alarm(seconds):
+    if _zone is None:
+        return
+    try:
+        alarms.add_alarm(_zone, create_time_span(seconds=seconds), _poll_answers)
+    except Exception:
+        npc_log.log_exception("scheduling the LLM answer poll")
+
+
+def _poll_answers(*_args, **_kwargs):
+    global _poll_left
+    try:
+        _apply_llm_answers()
+    except Exception:
+        npc_log.log_exception("applying the LLM's answer")
+        _poll_left = 0
+        return
+    if _poll_left > 0 and npc_llm.pending_ids():
+        _poll_left -= 1
+        _add_poll_alarm(5)
+    else:
+        _poll_left = 0
 
 
 def _apply_llm_answers(report=None):
     for sim_id, action, reason, error in npc_llm.take_answers():
         if error:
             _say(report, "LLM for sim {}: {}".format(sim_id, error), level="WARN")
+            sim_info = services.sim_info_manager().get(sim_id)
+            if sim_info is not None:
+                _warn_llm_down(sim_info, error)
+            # Never leave the sim standing around: their routine is still a valid answer.
+            _fall_back_to_routine(sim_id, report)
             continue
         _say(report, "LLM for sim {}: {} ({})".format(sim_id, action, reason))
         if action in (None, NONE_ACTION):
@@ -454,6 +527,38 @@ def _apply_llm_answers(report=None):
             continue
         if _push_activity(sim, action, report) and reason and npc_llm.data().get("notify", True):
             _notify(sim_info, "{} is going to {}".format(sim_info.first_name, action), reason)
+
+
+def _warn_llm_down(sim_info, error):
+    """Tell the player once per session why nothing is happening, instead of failing silently."""
+    global _llm_error_notified
+    if _llm_error_notified:
+        return
+    _llm_error_notified = True
+    try:
+        _notify(sim_info, "Local LLM not running",
+                "The NPC brain could not reach it ({}). Start start-llm.cmd; sims use their "
+                "routines until then.".format(error))
+    except Exception:
+        npc_log.log_exception("warning that the LLM is down")
+
+
+def _fall_back_to_routine(sim_id, report=None):
+    try:
+        if sim_id not in _npc_mode_sim_ids:
+            return
+        now = services.time_service().sim_timeline.now
+        activity = _store.get(sim_id).due_activity(now.day(), now.hour())
+        if activity is None:
+            return
+        sim_info = services.sim_info_manager().get(sim_id)
+        sim = sim_info.get_sim_instance() if sim_info is not None else None
+        if sim is not None:
+            _push_activity(sim, activity, report)
+        elif sim_info is not None:
+            _offlot_hour(sim_info, activity, report)
+    except Exception:
+        npc_log.log_exception("falling back to the routine")
 
 
 def _notify(sim_info, title, text):
@@ -477,12 +582,13 @@ def _tick(*_args, **_kwargs):
 
 
 def _start_alarm(zone):
+    global _alarm_handle, _zone
+    _zone = zone
     # Re-created on every zone load rather than guarded to "once": an alarm's owner is
     # held by weakref (alarms.py), so an alarm owned by a previous zone may already be
     # dead by the time we get here after a zone transition. Cancelling unconditionally
     # and re-creating, owned by the current zone, avoids having to reason about exactly
     # when that weakref dies.
-    global _alarm_handle
     if _alarm_handle is not None:
         try:
             alarms.cancel_alarm(_alarm_handle)
@@ -518,7 +624,7 @@ def _patched_on_loading_screen_animation_finished(self, *args, **kwargs):
 zone_module.Zone.on_loading_screen_animation_finished = _patched_on_loading_screen_animation_finished
 
 
-@sims4.commands.Command("bluerabbit477.npc.on", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.npc.on", command_type=sims4.commands.CommandType.Live)
 def npc_on(opt_sim: OptionalSimInfoParam = None, _connection=None):
     output = sims4.commands.CheatOutput(_connection)
     sim_id = _resolve_sim_id(opt_sim, _connection)
@@ -532,7 +638,7 @@ def npc_on(opt_sim: OptionalSimInfoParam = None, _connection=None):
     npc_log.log("npc.on sim {} (routine entries: {})".format(sim_id, len(_store.get(sim_id).entries)))
 
 
-@sims4.commands.Command("bluerabbit477.npc.off", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.npc.off", command_type=sims4.commands.CommandType.Live)
 def npc_off(opt_sim: OptionalSimInfoParam = None, _connection=None):
     output = sims4.commands.CheatOutput(_connection)
     sim_id = _resolve_sim_id(opt_sim, _connection)
@@ -546,7 +652,7 @@ def npc_off(opt_sim: OptionalSimInfoParam = None, _connection=None):
     npc_log.log("npc.off sim {}".format(sim_id))
 
 
-@sims4.commands.Command("bluerabbit477.routine.add", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.routine.add", command_type=sims4.commands.CommandType.Live)
 def routine_add(days: str, start_hour: int, length_hours: int, activity: str,
                 opt_sim: OptionalSimInfoParam = None, _connection=None):
     output = sims4.commands.CheatOutput(_connection)
@@ -568,7 +674,7 @@ def routine_add(days: str, start_hour: int, length_hours: int, activity: str,
     npc_log.log("routine.add sim {}: {}".format(sim_id, entry))
 
 
-@sims4.commands.Command("bluerabbit477.routine.show", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.routine.show", command_type=sims4.commands.CommandType.Live)
 def routine_show(opt_sim: OptionalSimInfoParam = None, _connection=None):
     output = sims4.commands.CheatOutput(_connection)
     sim_id = _resolve_sim_id(opt_sim, _connection)
@@ -586,7 +692,7 @@ def routine_show(opt_sim: OptionalSimInfoParam = None, _connection=None):
         output("  {}".format(entry))
 
 
-@sims4.commands.Command("bluerabbit477.npc.tick", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.npc.tick", command_type=sims4.commands.CommandType.Live)
 def npc_tick(_connection=None):
     """Runs the hourly check right now and prints what it decided."""
     output = sims4.commands.CheatOutput(_connection)
@@ -597,7 +703,7 @@ def npc_tick(_connection=None):
         output("npc.tick failed - see the log.")
 
 
-@sims4.commands.Command("bluerabbit477.npc.find", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.npc.find", command_type=sims4.commands.CommandType.Live)
 def npc_find(text: str, _connection=None):
     """Lists interaction tuning names containing `text`, to find the real names for
     ACTIVITY_AFFORDANCES. Also written to the log, since the console only shows so much."""
@@ -616,7 +722,7 @@ def npc_find(text: str, _connection=None):
         output("  " + name)
 
 
-@sims4.commands.Command("bluerabbit477.npc.clubs", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.npc.clubs", command_type=sims4.commands.CommandType.Live)
 def npc_clubs(text: str, _connection=None):
     """Lists club activities whose tuning name contains `text`, and the interactions each uses."""
     output = sims4.commands.CheatOutput(_connection)
@@ -633,7 +739,7 @@ def npc_clubs(text: str, _connection=None):
         output("  {}: {}".format(group_name, ", ".join(names[:8]) + (" ..." if len(names) > 8 else "")))
 
 
-@sims4.commands.Command("bluerabbit477.npc.try", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.npc.try", command_type=sims4.commands.CommandType.Live)
 def npc_try(activity: str, opt_sim: OptionalSimInfoParam = None, _connection=None):
     """Pushes an activity key (jog, paint, ...) or a raw interaction name on the selected sim
     right now, with no target object, and prints what the game said."""
@@ -646,7 +752,7 @@ def npc_try(activity: str, opt_sim: OptionalSimInfoParam = None, _connection=Non
     _push_activity(sim, activity, report=output)
 
 
-@sims4.commands.Command("bluerabbit477.routine.clear", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.routine.clear", command_type=sims4.commands.CommandType.Live)
 def routine_clear(opt_sim: OptionalSimInfoParam = None, _connection=None):
     output = sims4.commands.CheatOutput(_connection)
     sim_id = _resolve_sim_id(opt_sim, _connection)

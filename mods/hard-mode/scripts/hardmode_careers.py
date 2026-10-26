@@ -3,9 +3,10 @@ sims/careers into the plain names and numbers used here.
 
 Rule (Amber, 2026-10-09): to newly join a gated full-time career a sim needs the career's
 minimum skills, UNLESS they have finished a degree that waives it. Since 2026-10-14 ANY
-finished degree waives every gate (ANY_DEGREE_UNLOCKS_ALL); the per-career degrees in GATES
-are kept so that can be switched back. Sims already in the
-career are never blocked (grandfathered), and careers not in GATES aren't gated at all.
+finished degree waives every gate (ANY_DEGREE_UNLOCKS_ALL); Flexible University's
+Certificate and Associate Degree count the same way. The per-career degrees in GATES are
+kept so that can be switched back. Sims already in the career are never blocked
+(grandfathered), and careers not in GATES aren't gated at all.
 
 Names are matched against the game's tuning names in hardmode_main.py:
 - career keys are matched case-insensitively as a substring of the career tuning name
@@ -64,6 +65,16 @@ def gate_for_career(career_name):
     return max(matches, key=len) if matches else None
 
 
+def qualification_degree_names(credentials):
+    """Flexible University credential rows -> degree tuning names for degree_waives().
+
+    Certificate and Associate Degree records use the same major tuning name as a finished
+    degree, so they satisfy both the "any degree" rule and the per-career waiver table.
+    """
+    return [c["major"] for c in credentials or ()
+            if isinstance(c, dict) and c.get("major")]
+
+
 def degree_waives(gate_key, finished_degree_names):
     """True if one of the finished degrees (tuning names) waives this career's skill gate."""
     waivers = GATES[gate_key][1]
@@ -100,9 +111,10 @@ def check_join(career_name, is_full_time, skill_levels, finished_degree_names,
     if gate_key is None:
         return False, "this career has no skill gate"
     if degree_waives(gate_key, finished_degree_names):
-        return False, "a finished degree waives the skill gate"
+        return False, "a finished degree or university qualification waives the skill gate"
     missing = missing_skills(gate_key, skill_levels)
     if missing:
-        return True, "needs " + "; ".join(missing) + (" - or any finished degree" if ANY_DEGREE_UNLOCKS_ALL
-                                                    else " - or a relevant degree")
+        return True, "needs " + "; ".join(missing) + (
+            " - or any finished degree or qualification" if ANY_DEGREE_UNLOCKS_ALL
+            else " - or a relevant degree")
     return False, "skill requirements met"

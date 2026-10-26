@@ -15,12 +15,12 @@ Settings (all of Hard Mode's are in hardmode_settings.py):
   firing on|off   - missed days get sims fired; fired sims can't be hired for a while.
 
 Cheats:
-  bluerabbit477.hard.status                - every Hard Mode setting
-  bluerabbit477.hard.set <setting> <value> - change one
-  bluerabbit477.hard.careers on|off
-  bluerabbit477.hard.enforce on|off
-  bluerabbit477.hard.check <career> [sim]  - what the rule decides for that sim, and why
-  bluerabbit477.hard.gates                 - which game careers/skills our table matched
+  houserules.hard.status                - every Hard Mode setting
+  houserules.hard.set <setting> <value> - change one
+  houserules.hard.careers on|off
+  houserules.hard.enforce on|off
+  houserules.hard.check <career> [sim]  - what the rule decides for that sim, and why
+  houserules.hard.gates                 - which game careers/skills our table matched
 """
 import services
 import sims4.commands
@@ -32,7 +32,7 @@ from server_commands.argument_helpers import OptionalSimInfoParam, TunableInstan
 
 import hardmode_log
 import hardmode_state
-from hardmode_careers import ALL_SKILLS, GATES, check_join, gate_for_career
+from hardmode_careers import ALL_SKILLS, GATES, check_join, gate_for_career, qualification_degree_names
 from hardmode_settings import DEFAULT_SETTINGS
 from hardmode_work import FIRED_COOLDOWN_DAYS, MISSED_DAYS_TO_FIRE, WorkRecord
 
@@ -116,6 +116,15 @@ def _finished_degrees(sim_info):
     return names
 
 
+def _qualifications(sim_info):
+    """Flexible University Certificates and Associate Degrees for this Sim.
+
+    They are recorded by that mod rather than as a full degree, but for the career gate
+    they count exactly like one: the Sim has already proven they can do university work.
+    """
+    return hardmode_state.university_credentials(sim_info.sim_id)
+
+
 def _evaluate(sim_info, career_type):
     """Returns (blocked, reason, details) for this sim newly joining career_type."""
     _ensure_loaded()
@@ -124,11 +133,17 @@ def _evaluate(sim_info, career_type):
                   for c in sim_info.career_tracker.careers.values())
     skills = _skill_levels(sim_info)
     degrees = _finished_degrees(sim_info)
-    blocked, reason = check_join(career_type.__name__, is_full_time, skills, degrees, already,
-                                 enabled=_settings.get("careers"))
+    qualifications = _qualifications(sim_info)
+    # A qualification's "major" is the same degree tuning name a finished degree has, so
+    # the existing per-career waiver table and "any degree" rule both keep working.
+    credentials = qualification_degree_names(qualifications)
+    blocked, reason = check_join(career_type.__name__, is_full_time, skills, degrees + credentials,
+                                 already, enabled=_settings.get("careers"))
     details = {"career": career_type.__name__, "gate": gate_for_career(career_type.__name__),
                "full_time": is_full_time, "already_in_it": already,
-               "skills": {k: v for k, v in skills.items() if v}, "finished_degrees": degrees}
+               "skills": {k: v for k, v in skills.items() if v}, "finished_degrees": degrees,
+               "qualifications": ["{} ({})".format(q.get("label") or q.get("tier"), q["major"])
+                                  for q in qualifications]}
     return blocked, reason, details
 
 
@@ -279,7 +294,7 @@ hardmode_log.log("firing hooks installed")
 # --- Cheats --------------------------------------------------------------------------
 def _set_from_cheat(key, state, output):
     if state not in ("on", "off"):
-        output("Usage: bluerabbit477.hard.{} on|off".format(key))
+        output("Usage: houserules.hard.{} on|off".format(key))
         return
     _ensure_loaded()
     _settings.set(key, state == "on")
@@ -287,17 +302,17 @@ def _set_from_cheat(key, state, output):
     output("Hard Mode: {} is now {}.".format(key, state))
 
 
-@sims4.commands.Command("bluerabbit477.hard.careers", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.hard.careers", command_type=sims4.commands.CommandType.Live)
 def hard_careers(state: str, _connection=None):
     _set_from_cheat("careers", state, sims4.commands.CheatOutput(_connection))
 
 
-@sims4.commands.Command("bluerabbit477.hard.enforce", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.hard.enforce", command_type=sims4.commands.CommandType.Live)
 def hard_enforce(state: str, _connection=None):
     _set_from_cheat("enforce", state, sims4.commands.CheatOutput(_connection))
 
 
-@sims4.commands.Command("bluerabbit477.hard.status", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.hard.status", command_type=sims4.commands.CommandType.Live)
 def hard_status(_connection=None):
     output = sims4.commands.CheatOutput(_connection)
     _ensure_loaded()
@@ -306,10 +321,10 @@ def hard_status(_connection=None):
         value = _settings.get(key)
         parts.append("{} = {}".format(key, ("on" if value else "off") if _settings.is_switch(key) else value))
     output("Hard Mode: " + ", ".join(parts))
-    output("Change one with: bluerabbit477.hard.set <setting> on|off (start_funds takes a number)")
+    output("Change one with: houserules.hard.set <setting> on|off (start_funds takes a number)")
 
 
-@sims4.commands.Command("bluerabbit477.hard.set", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.hard.set", command_type=sims4.commands.CommandType.Live)
 def hard_set(key: str = "", value: str = "", _connection=None):
     output = sims4.commands.CheatOutput(_connection)
     _ensure_loaded()
@@ -319,7 +334,7 @@ def hard_set(key: str = "", value: str = "", _connection=None):
     try:
         if _settings.is_switch(key):
             if value not in ("on", "off"):
-                output("Usage: bluerabbit477.hard.set {} on|off".format(key))
+                output("Usage: houserules.hard.set {} on|off".format(key))
                 return
             _settings.set(key, value == "on")
         else:
@@ -332,7 +347,7 @@ def hard_set(key: str = "", value: str = "", _connection=None):
     output("Hard Mode: {} is now {}.".format(key, value))
 
 
-@sims4.commands.Command("bluerabbit477.hard.check", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.hard.check", command_type=sims4.commands.CommandType.Live)
 def hard_check(career_type: TunableInstanceParam(sims4.resources.Types.CAREER),
                opt_sim: OptionalSimInfoParam = None, _connection=None):
     output = sims4.commands.CheatOutput(_connection)
@@ -356,9 +371,11 @@ def hard_check(career_type: TunableInstanceParam(sims4.resources.Types.CAREER),
         details["gate"], details["full_time"], details["already_in_it"]))
     output("  skills: {}".format(details["skills"] or "none"))
     output("  finished degrees: {}".format(details["finished_degrees"] or "none"))
+    if details["qualifications"]:
+        output("  Flexible University qualifications: {}".format(", ".join(details["qualifications"])))
 
 
-@sims4.commands.Command("bluerabbit477.hard.gates", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.hard.gates", command_type=sims4.commands.CommandType.Live)
 def hard_gates(_connection=None):
     """Which full-time careers in this game matched a gate, and which skills were found."""
     output = sims4.commands.CheatOutput(_connection)

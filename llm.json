@@ -5,7 +5,7 @@
     "ollama": {
       "winget": "Ollama.Ollama",
       "url": "http://localhost:11434/api/generate",
-      "model": "llama3.2"
+      "model": "qwen2.5:3b-instruct"
     },
     "lmstudio": {
       "winget": "ElementLabs.LMStudio",

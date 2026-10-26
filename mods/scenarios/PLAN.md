@@ -1,6 +1,6 @@
 # Scenarios
 
-**Status:** phase 1 (files and goals) built 2026-10-14, to test (TESTING.md section 6); rules (phase 2) are read but not enforced. Choices made while building: relationship goals use score thresholds (friend 30, good friend 60, best friend 90, partner 50 romance, married = has a spouse) rather than the game's bits; rewards are money, a trait and a notification (moodlets and satisfaction points later); start conditions don't join careers yet; `who` is active/any/all (roles later); collection goals later · **Type:** script (phase 3 adds a build tool that makes tuning) · **Size:** medium to large
+**Status:** phase 1 (files and goals) built 2026-10-14, phase 2 (rules and penalties) built 2026-10-26, to test (TESTING.md section 6). Choices made while building: relationship goals use score thresholds (friend 30, good friend 60, best friend 90, partner 50 romance, married = has a spouse) rather than the game's bits; rewards are money, a trait and a notification (moodlets and satisfaction points later); start conditions don't join careers yet; `who` is active/any/all (roles later); collection goals later · **Type:** script (phase 3 adds a build tool that makes tuning) · **Size:** medium to large
 
 ## Goal
 
@@ -36,7 +36,7 @@ automatic goals, look at this plan again.
 
 ## The scenario file
 
-One file per scenario in `Mods/BlueRabbit477/scenarios/<name>.json`, so they can be
+One file per scenario in `Mods/HouseRules/scenarios/<name>.json`, so they can be
 added or edited without rebuilding the mod. Example:
 
 ```json
@@ -76,7 +76,7 @@ added or edited without rebuilding the mod. Example:
 - **requires:** a goal stays hidden until these goals are done. That gives chapters without a
   separate phases concept (EA's scenarios have phases; this covers most of what they're for).
 - Names are the game's tuning names (`trait_Ambitious`, skills by the end of their name, as in
-  Hard Mode). `bluerabbit477.scenario.validate <name>` lists anything the game doesn't recognise
+  Hard Mode). `houserules.scenario.validate <name>` lists anything the game doesn't recognise
   before you start.
 - A file that doesn't parse, or has an unknown type, is refused with the line and reason, never
   half-started.
@@ -107,9 +107,14 @@ enemies), age (later), move to lot (later).
 |---|---|---|
 | `no_career` | joining a full-time career | the `careers.select` wrap Hard Mode already has |
 | `no_cheats` | money or skill cheats | the game's own "has cheated" flag on the household (`_has_cheated` in `household.pyc`) |
-| `max_purchase` | one Build/Buy purchase above §N | funds removed with a purchase reason |
+| `max_purchase` | one Build/Buy visit that spends more than §N | funds at Build/Buy enter vs exit |
 | `max_money` | holding more than §N | hourly check |
-| `no_leaving_lot` | travel | zone change |
+| `no_leaving_lot` | travel | zone change (recorded on zone load) |
+
+Each rule breaks **once per scenario** (it's recorded in the progress file), so a warning or fine
+isn't repeated every hour. `no_career` counts any career, part-time included.
+`max_purchase` sees the whole Build/Buy visit, not each item: the game's Build/Buy runs in C++
+and doesn't report single purchases to Python.
 
 **Penalties:** `warning` (a notification), `money` (fine), `moodlet` (a game buff by name),
 `fail` (ends the scenario as lost).
@@ -122,33 +127,52 @@ enemies), age (later), move to lot (later).
   (`requires`), deciding win/lose, rule decisions. The same file format is used by the
   later build tool, so the format is defined once.
 - `scenario_main.py` (game layer): cheats, applying starting conditions, an hourly check
-  plus event hooks for goals and rules, notifications.
-- **Progress is saved per household** in `Mods/BlueRabbit477/data/scenarios_progress.json`
+  plus event hooks (Build/Buy enter/exit, zone load) for goals and rules, notifications.
+- **Progress is saved per household** in `Mods/HouseRules/data/scenarios_progress.json`
   (scenario name, start day, done goals, broken rules). It's per computer, not inside the
   save file. Saves of the same household from different points in time can disagree; see the open questions.
 - Hard Mode, Social Standing and Aspiration Progress keep working alongside; Hard Mode's
   starting funds are skipped when a scenario sets its own money.
 
 **Cheats:**
-- `bluerabbit477.scenario.list`: scenario files found.
-- `bluerabbit477.scenario.validate <name>`: check a file without starting it.
-- `bluerabbit477.scenario.start <name>`: for the active household.
-- `bluerabbit477.scenario.status`: goals done/open (with numbers, e.g. Painting 4/6), rules,
+- `houserules.scenario.list`: scenario files found.
+- `houserules.scenario.validate <name>`: check a file without starting it.
+- `houserules.scenario.start <name>`: for the active household.
+- `houserules.scenario.status`: goals done/open (with numbers, e.g. Painting 4/6), rules,
   days left.
-- `bluerabbit477.scenario.check <goal>`: tick a `custom` goal.
-- `bluerabbit477.scenario.quit`
+- `houserules.scenario.check <goal>`: tick a `custom` goal.
+- `houserules.scenario.quit`
 
 ## Phases
 
 1. **Files and goals:** file format, validation, start/status/quit, starting conditions,
    goal types, rewards, win/lose. Comes with 2–3 example scenarios.
-2. **Rules and penalties.**
-3. **Export to the game's Scenarios menu:** a build tool turns a scenario file into
-   `Scenario`/phase/goal tuning in a `.package`. Only goals that have a matching
-   situation-goal type can be exported; others make the tool explain why. Needs research
-   into `gameplay_scenarios/` and how Sims 4 Studio-made custom scenarios are built.
+2. **Rules and penalties.** Built 2026-10-26 (see above); to test.
+3. **Export to the game's Scenarios menu.** Built 2026-10-26 as `tools/scenario_export.py`,
+   driven by `tools/scenario_builder.py` (a local web builder). What it does: reads the same
+   JSON, writes `Scenario`, `ScenarioPhase`, `ScenarioGoal` (`SituationGoalActor` or
+   `SituationGoalTime`), `ScenarioOutcome` and `LootActions` tuning XML, then builds a
+   `.package` with `tools/tuning.py`. References to EA tuning are written by **name**
+   (`Skill_Painting`, `trait_Ambitious`): the game hashes names for instance ids, so no id
+   table is needed. The menu lists every `Scenario` snippet (`scenarios.dump` uses the same
+   enumeration) and gets its card fields from ClientBinary exports, which is why this is a
+   `.package` and not something a script can add at runtime.
+
+   **Limits found while building it** (also reported in the UI):
+   - Only `skill`, `household_money`, `home_value`, `household_size` and `day` goals map to
+     existing situation goals. `career_level`, `relationship`, `aspiration` and `custom` do not.
+   - Rules, `deadline_days` and reward notifications stay with the script mod. `remove_careers`
+     and children-only household size do not export.
+   - `ScenarioCategory` / `ScenarioDifficultyCategory` are `DynamicEnum`s whose display names
+     live in EA module tuning. The exporter takes enum names from `menu.category` /
+     `menu.difficulty` and warns if they are missing; it does not guess them.
+   - `who` in a skill goal only tracks the active sim in the menu version.
+   - The entry is a new-household scenario (`NEW_HOUSEHOLD`); adding it to an existing save is
+     still the cheat.
+   - The package has to be tested in game: the XML is built from the decompiled tunables, not
+     copied from an EA example.
 4. **In-game builder:** picker dialogs (like `routine.edit`) to make or edit a scenario, saved
-   as a file.
+   as a file. The outside-the-game builder above covers the editing part for now.
 
 ## Open questions
 

@@ -3,6 +3,7 @@ ea_scripts/
 build/
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # Overnight scheduler runner, lock and log (machine-specific).
 overnight/

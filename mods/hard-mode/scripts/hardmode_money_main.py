@@ -1,6 +1,6 @@
 """Hard Mode: Money - game layer. The rules are in hardmode_money.py.
 
-Hooks (each one checks its setting every time, so `bluerabbit477.hard.set <setting> off`
+Hooks (each one checks its setting every time, so `houserules.hard.set <setting> off`
 works straight away; each also falls back to EA's own result if anything goes wrong):
 
 selling  - SimInfo.get_item_sell_price_modifier: EA asks it for nearly every way of selling
@@ -17,14 +17,14 @@ debt     - Bills._shut_off_utility: the unpaid bill becomes debt instead (up to 
 start_funds - on loading a household for the first time, it's cut to the setting.
 
 Cheats:
-  bluerabbit477.hard.money.status   - markup table, this household's market and debt
-  bluerabbit477.hard.money.reset    - forget this household's sales history and debt
-  bluerabbit477.hard.money.bill_to_debt - for testing: turn the unpaid bill into debt now
-  bluerabbit477.hard.money.pay_debt [amount] - pay debt off early; no amount opens a picker
+  houserules.hard.money.status   - markup table, this household's market and debt
+  houserules.hard.money.reset    - forget this household's sales history and debt
+  houserules.hard.money.bill_to_debt - for testing: turn the unpaid bill into debt now
+  houserules.hard.money.pay_debt [amount] - pay debt off early; no amount opens a picker
 
-Phone: "Pay Off Debt" (tuning/PayOffDebt.xml, built into BlueRabbit477_hard-mode.package) is
+Phone: "Pay Off Debt" (tuning/PayOffDebt.xml, built into HouseRules_hard-mode.package) is
 added to Sim.potential_phone_interactions while the household has debt; it runs
-bluerabbit477.hard.money.pay_debt_phone, which opens the same picker.
+houserules.hard.money.pay_debt_phone, which opens the same picker.
 """
 import alarms
 import services
@@ -40,7 +40,7 @@ from hardmode_money import (MarketLedger, bill_to_debt, credit_limit, daily_debt
                             household_size_bill_factor, item_kind, markup_curve, markup_satisfaction_factor,
                             markup_scale, repay_debt, repay_options, sell_multiplier, starting_funds_cut)
 
-PAY_DEBT_AFFORDANCE_ID = 17635194557068363251   # s= in tuning/PayOffDebt.xml
+PAY_DEBT_AFFORDANCE_ID = 9634109801551932310   # s= in tuning/PayOffDebt.xml
 
 _LEDGER_FILE = "hard_mode_market.json"
 _DEBT_FILE = "hard_mode_debt.json"   # {household_id: debt}
@@ -92,7 +92,7 @@ def _wrap_sell_modifier():
     runs at zone load (by then SimInfo has EA's version) rather than at import."""
     from sims.sim_info import SimInfo
     original = SimInfo.get_item_sell_price_modifier
-    if getattr(original, "_bluerabbit477", False):
+    if getattr(original, "_houserules", False):
         return
 
     def get_item_sell_price_modifier(self, item_or_tags, *args, **kwargs):
@@ -109,7 +109,7 @@ def _wrap_sell_modifier():
             hardmode_log.log_exception("sell price modifier")
             return value
 
-    get_item_sell_price_modifier._bluerabbit477 = True
+    get_item_sell_price_modifier._houserules = True
     SimInfo.get_item_sell_price_modifier = get_item_sell_price_modifier
     hardmode_log.log("sell price hook installed")
 
@@ -432,7 +432,7 @@ def _wrap_phone():
                 return
             affordance = services.get_instance_manager(sims4.resources.Types.INTERACTION).get(PAY_DEBT_AFFORDANCE_ID)
             if affordance is None:
-                hardmode_log.log("phone: Pay Off Debt tuning not loaded (is BlueRabbit477_hard-mode.package installed?)")
+                hardmode_log.log("phone: Pay Off Debt tuning not loaded (is HouseRules_hard-mode.package installed?)")
                 return
             yield from affordance.potential_interactions(self, context, **kwargs)
         except Exception:
@@ -491,7 +491,7 @@ def on_zone_loaded(zone):
 
 
 # --- Cheats --------------------------------------------------------------------------
-@sims4.commands.Command("bluerabbit477.hard.money.status", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.hard.money.status", command_type=sims4.commands.CommandType.Live)
 def money_status(_connection=None):
     output = sims4.commands.CheatOutput(_connection)
     lines = ["markup -> what it really earns: " + ", ".join(
@@ -513,7 +513,7 @@ def money_status(_connection=None):
         hardmode_log.log("money.status " + line)
 
 
-@sims4.commands.Command("bluerabbit477.hard.money.bill_to_debt", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.hard.money.bill_to_debt", command_type=sims4.commands.CommandType.Live)
 def money_bill_to_debt(_connection=None):
     """For testing: does now what happens when utilities would be shut off for an unpaid bill."""
     output = sims4.commands.CheatOutput(_connection)
@@ -531,7 +531,7 @@ def money_bill_to_debt(_connection=None):
     output("Bill moved to debt." if moved else "Not moved (over the credit limit - see the notification).")
 
 
-@sims4.commands.Command("bluerabbit477.hard.money.pay_debt", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.hard.money.pay_debt", command_type=sims4.commands.CommandType.Live)
 def money_pay_debt(amount: int = None, _connection=None):
     output = sims4.commands.CheatOutput(_connection)
     sim_info = services.active_sim_info()
@@ -549,7 +549,7 @@ def money_pay_debt(amount: int = None, _connection=None):
         output("Failed - see the log.")
 
 
-@sims4.commands.Command("bluerabbit477.hard.money.pay_debt_phone", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.hard.money.pay_debt_phone", command_type=sims4.commands.CommandType.Live)
 def money_pay_debt_phone(opt_sim: OptionalTargetParam = None, _interaction_id: float = None, _connection=None):
     """Run by the phone's Pay Off Debt with the sim's id (and, like EA's, maybe an interaction id)."""
     try:
@@ -561,7 +561,7 @@ def money_pay_debt_phone(opt_sim: OptionalTargetParam = None, _interaction_id: f
         hardmode_log.log_exception("hard.money.pay_debt_phone")
 
 
-@sims4.commands.Command("bluerabbit477.hard.money.reset", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.hard.money.reset", command_type=sims4.commands.CommandType.Live)
 def money_reset(_connection=None):
     output = sims4.commands.CheatOutput(_connection)
     household = services.active_household()

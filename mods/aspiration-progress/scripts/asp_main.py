@@ -22,8 +22,8 @@ What this mod changes:
    one not selected - gives its trait once every level is done.
 
 Cheats:
-  bluerabbit477.asp.status [sim]  - levels already done ahead of where the sim is
-  bluerabbit477.asp.on / .off
+  houserules.asp.status [sim]  - levels already done ahead of where the sim is
+  houserules.asp.on / .off
 """
 import json
 import os
@@ -41,7 +41,7 @@ import asp_log
 from asp_logic import ahead_of, all_complete, first_incomplete, index_tracks
 
 _SETTINGS_FILE = os.path.join(os.path.expanduser("~"), "Documents", "Electronic Arts", "The Sims 4", "Mods",
-                              "BlueRabbit477", "data", "aspiration_progress.json")
+                              "HouseRules", "data", "aspiration_progress.json")
 _settings = None
 
 
@@ -237,7 +237,7 @@ _zone_module.Zone.on_loading_screen_animation_finished = _patched_on_loading_scr
 
 
 # --- Cheats -----------------------------------------------------------------------------------
-@sims4.commands.Command("bluerabbit477.asp.status", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.asp.status", command_type=sims4.commands.CommandType.Live)
 def asp_status(opt_sim: OptionalSimInfoParam = None, _connection=None):
     output = sims4.commands.CheatOutput(_connection)
     sim_info = get_optional_target(opt_sim, _connection, target_type=OptionalSimInfoParam)
@@ -268,13 +268,13 @@ def asp_status(opt_sim: OptionalSimInfoParam = None, _connection=None):
         asp_log.log("asp.status " + line)
 
 
-@sims4.commands.Command("bluerabbit477.asp.on", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.asp.on", command_type=sims4.commands.CommandType.Live)
 def asp_on(_connection=None):
     _set_enabled(True)
     sims4.commands.CheatOutput(_connection)("Aspiration Progress is on (takes full effect after the next load).")
 
 
-@sims4.commands.Command("bluerabbit477.asp.off", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.asp.off", command_type=sims4.commands.CommandType.Live)
 def asp_off(_connection=None):
     _set_enabled(False)
     sims4.commands.CheatOutput(_connection)("Aspiration Progress is off (takes full effect after the next load).")

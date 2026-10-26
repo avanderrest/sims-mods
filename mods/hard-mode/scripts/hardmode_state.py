@@ -1,7 +1,7 @@
 """Hard Mode: shared game-side state - settings, saved data, the sim clock and notifications.
 
 Everything the careers, money and skills parts share, so they don't each load their own copy.
-Data files live in Mods/BlueRabbit477/data/ (they're per computer, not per save: ids of
+Data files live in Mods/HouseRules/data/ (they're per computer, not per save: ids of
 households and sims from different saves don't collide in practice).
 """
 import json
@@ -11,7 +11,7 @@ import hardmode_log
 from hardmode_settings import Settings
 
 DATA_DIR = os.path.join(os.path.expanduser("~"), "Documents", "Electronic Arts",
-                        "The Sims 4", "Mods", "BlueRabbit477", "data")
+                        "The Sims 4", "Mods", "HouseRules", "data")
 _SETTINGS_PATH = os.path.join(DATA_DIR, "hard_mode_settings.json")
 
 settings = Settings()
@@ -39,6 +39,25 @@ def save_settings():
         settings.save(_SETTINGS_PATH)
     except Exception:
         hardmode_log.log_exception("saving settings")
+
+
+_FU_DATA_FILE = "flexible_university_data.json"
+
+
+def university_credentials(sim_id):
+    """Qualifications Flexible University recorded for a Sim.
+
+    Read from its data file instead of importing its modules: the mods are separate
+    .ts4script archives, and the JSON file is the stable contract between them. Returns []
+    when Flexible University isn't installed or has nothing recorded yet.
+    """
+    data = load_json(_FU_DATA_FILE, {})
+    try:
+        entries = (data.get("credentials") or {}).get(str(sim_id)) or {}
+    except AttributeError:
+        return []
+    return [entry for entry in entries.values()
+            if isinstance(entry, dict) and entry.get("major")]
 
 
 def load_json(name, default):

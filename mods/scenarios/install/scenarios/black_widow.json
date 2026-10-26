@@ -1,0 +1,24 @@
+{
+  "name": "The Black Widow",
+  "description": "§2,000 and a silver tongue. Marry three different sims, outlive each one, and end up with §100,000 in funds and inheritance. The marriages are ticked by hand as you go.",
+  "start": {
+    "money": 2000,
+    "skills": {"active": {"Charisma": 3}}
+  },
+  "goals": [
+    {"id": "marriage_1", "type": "custom", "description": "Marry the first sim (tick when the wedding is over)"},
+    {"id": "marriage_2", "type": "custom", "requires": ["marriage_1"],
+     "description": "Marry a second, different sim (tick when the wedding is over)"},
+    {"id": "marriage_3", "type": "custom", "requires": ["marriage_2"],
+     "description": "Marry a third, different sim (tick when the wedding is over)"},
+    {"id": "fortune", "type": "household_money", "amount": 100000, "requires": ["marriage_3"],
+     "description": "Collect §100,000 in funds and inheritance",
+     "reward": {"notification": "Three weddings, one fortune."}}
+  ],
+  "deadline_days": 42,
+  "win": "all_goals",
+  "outcomes": {
+    "win": {"notification": "Three spouses, three inheritances. You did it beautifully."},
+    "lose": {"notification": "The money ran out before the next ring."}
+  }
+}

@@ -1,6 +1,6 @@
 import hardmode_careers
 from hardmode_careers import (GATES, ALL_SKILLS, gate_for_career, degree_waives,
-                              missing_skills, check_join)
+                              missing_skills, check_join, qualification_degree_names)
 
 
 def test_gate_matches_real_career_tuning_names():
@@ -17,7 +17,7 @@ def test_gate_matches_real_career_tuning_names():
 
 
 def test_gate_matches_names_seen_in_game():
-    # From bluerabbit477.hard.gates, 2026-10-09.
+    # From houserules.hard.gates, 2026-10-09.
     assert gate_for_career("career_Adult_Athletic") == "athlet"
     assert gate_for_career("careers_Adult_Activist") == "activist"
     assert gate_for_career("career_Adult_Active_Doctor") == "doctor"
@@ -62,7 +62,28 @@ def test_any_degree_unlocks_all_careers():
     assert degree_waives("athlet", ["degree_Biology"])
     assert not degree_waives("doctor", [])
     assert check_join("astronaut", True, {}, ["degree_Drama"], False)[0] is False
-    assert "any finished degree" in check_join("astronaut", True, {}, [], False)[1]
+    assert "any finished degree or qualification" in check_join("astronaut", True, {}, [], False)[1]
+
+
+def test_flexible_university_qualifications_count_as_degrees():
+    # Shape of an entry in flexible_university_data.json: Certificate in Biology.
+    credentials = [
+        {"tier": "certificate", "label": "Certificate", "major": "degree_Biology"},
+        {"tier": "associate", "label": "Associate Degree", "major": "degree_Physics"},
+        {"tier": "associate", "label": "Associate Degree"},  # malformed row is ignored
+        "not a dict",
+    ]
+    names = qualification_degree_names(credentials)
+    assert names == ["degree_Biology", "degree_Physics"]
+    assert check_join("doctor", True, {}, names, False)[0] is False
+    assert check_join("astronaut", True, {}, qualification_degree_names([]), False)[0] is True
+
+
+def test_partial_qualification_only_waives_its_own_degree_per_career(monkeypatch):
+    monkeypatch.setattr(hardmode_careers, "ANY_DEGREE_UNLOCKS_ALL", False)
+    names = qualification_degree_names([{"tier": "certificate", "major": "degree_Biology"}])
+    assert check_join("doctor", True, {}, names, False)[0] is False
+    assert check_join("astronaut", True, {}, names, False)[0] is True
 
 
 def test_degree_waivers_per_career(monkeypatch):

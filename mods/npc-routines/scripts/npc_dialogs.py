@@ -4,15 +4,21 @@ plus the cheats for phase 4 (the local-LLM brain).
 A real "NPC Routine..." entry in a sim's pie menu needs an interaction defined in tuning
 (a .package made in Sims 4 Studio). Until then, one cheat opens the editor:
 
-  bluerabbit477.routine.edit [sim]   - menu: add an activity / show / clear / NPC mode on-off
+  houserules.routine.edit [sim]   - menu: add an activity / show / clear / NPC mode on-off
       Add: activity -> days (pick several) -> start time -> how long
 
 Local LLM (optional; needs Ollama or LM Studio running on this computer):
-  bluerabbit477.npc.brain <text...> [sim]  - what this sim is like / wants (free text)
-  bluerabbit477.npc.brain_clear [sim]
-  bluerabbit477.npc.brain_show [sim]
-  bluerabbit477.npc.llm <url> <model>      - default http://localhost:11434/api/generate llama3.2
-  bluerabbit477.npc.llm_test [sim]         - ask now; the answer is used at the next hourly tick
+  houserules.npc.start [name|all]        - start the LLM brain (default: selected sim)
+  houserules.npc.stop [name|all]         - stop it again
+  houserules.npc.goal <text...>          - what this sim is working towards
+  houserules.npc.goal_clear [sim]
+  houserules.npc.brain <text...> [sim]   - what this sim is like / wants (free text)
+  houserules.npc.brain_clear [sim]
+  houserules.npc.brain_show [sim]        - shows the goal and the description
+  houserules.npc.llm <url> <model>       - default http://localhost:11434/api/generate qwen2.5:3b-instruct
+  houserules.npc.llm_test [sim]          - ask now; the answer is applied a few seconds later
+  houserules.npc.think [sim]             - show the last prompt and answer (and thinking, if any)
+  houserules.npc.reasoning on|off        - ask a thinking model for its working too (needs qwen3 etc.)
 """
 import services
 import sims4.commands
@@ -134,7 +140,7 @@ def _target(opt_sim, _connection):
     return get_optional_target(opt_sim, _connection, target_type=OptionalSimInfoParam)
 
 
-@sims4.commands.Command("bluerabbit477.routine.edit", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.routine.edit", command_type=sims4.commands.CommandType.Live)
 def routine_edit(opt_sim: OptionalSimInfoParam = None, _connection=None):
     output = sims4.commands.CheatOutput(_connection)
     sim_info = _target(opt_sim, _connection)
@@ -149,21 +155,117 @@ def routine_edit(opt_sim: OptionalSimInfoParam = None, _connection=None):
 
 
 # --- Phase 4 cheats ---------------------------------------------------------------------------
-@sims4.commands.Command("bluerabbit477.npc.brain", command_type=sims4.commands.CommandType.Live)
+def _household_sims():
+    household = services.active_household()
+    return list(household.sim_info_gen()) if household is not None else []
+
+
+def _matching_sims(words):
+    """Selected sim by default, every household sim for "all", else match by name or id."""
+    sims = _household_sims()
+    if not words:
+        sim_info = services.active_sim_info()
+        return [sim_info] if sim_info is not None else []
+    text = " ".join(str(w) for w in words).strip().lower()
+    if text == "all":
+        return sims
+    if text.isdigit():
+        return [sim for sim in sims if str(sim.sim_id) == text]
+    matches = []
+    for sim_info in sims:
+        first = (getattr(sim_info, "first_name", "") or "").lower()
+        last = (getattr(sim_info, "last_name", "") or "").lower()
+        full = (first + " " + last).strip()
+        if text in (first, full) or (len(text) >= 3 and text in full):
+            matches.append(sim_info)
+    return matches
+
+
+@sims4.commands.Command("houserules.npc.start", command_type=sims4.commands.CommandType.Live)
+def npc_start(*words, _connection=None):
+    """Start the LLM brain: selected sim by default, a sim name, or "all" in the household."""
+    output = sims4.commands.CheatOutput(_connection)
+    sims = _matching_sims(words)
+    if not sims:
+        output("No matching sim. Usage: houserules.npc.start [name|all] "
+               "(default: the selected sim)")
+        return
+    npc_main._ensure_loaded()
+    available = npc_llm.reachable()
+    started, needs_text = [], []
+    for sim_info in sims:
+        npc_main._npc_mode_sim_ids.add(sim_info.sim_id)
+        if not available:
+            continue
+        if npc_llm.goal_for(sim_info.sim_id) or npc_llm.instructions_for(sim_info.sim_id):
+            npc_main._ask_now(sim_info, output)
+            started.append(sim_info.first_name)
+        else:
+            needs_text.append(sim_info.first_name)
+    npc_main._save_npc_mode()
+    if not available:
+        output("The local LLM isn't reachable - start start-llm.cmd. NPC mode is on; "
+               "routines will be used until it is running.")
+    if started:
+        output("Started the LLM for {}; the answer is applied in a few seconds.".format(
+            ", ".join(started)))
+    if needs_text:
+        output("No goal or description yet for {} - set one with houserules.npc.goal.".format(
+            ", ".join(needs_text)))
+
+
+@sims4.commands.Command("houserules.npc.stop", command_type=sims4.commands.CommandType.Live)
+def npc_stop(*words, _connection=None):
+    output = sims4.commands.CheatOutput(_connection)
+    sims = _matching_sims(words)
+    if not sims:
+        output("No matching sim. Usage: houserules.npc.stop [name|all]")
+        return
+    npc_main._ensure_loaded()
+    for sim_info in sims:
+        npc_main._npc_mode_sim_ids.discard(sim_info.sim_id)
+        npc_main._next_ask.pop(sim_info.sim_id, None)
+    npc_main._save_npc_mode()
+    output("Stopped the LLM for {}.".format(", ".join(s.first_name for s in sims)))
+
+
+@sims4.commands.Command("houserules.npc.brain", command_type=sims4.commands.CommandType.Live)
 def npc_brain(*words, _connection=None):
     output = sims4.commands.CheatOutput(_connection)
     sim_info = services.active_sim_info()
     if sim_info is None or not words:
-        output("Usage: bluerabbit477.npc.brain <what this sim is like and wants> (for the selected sim)")
+        output("Usage: houserules.npc.brain <what this sim is like and wants> (for the selected sim)")
         return
     text = " ".join(str(w) for w in words)
     npc_llm.set_instructions(sim_info.sim_id, text)
     npc_log.log("npc.brain sim {}: {}".format(sim_info.sim_id, text))
     output("Saved for {}: {}".format(sim_info.first_name, text))
-    output("The LLM is asked when NPC mode is on and nothing is on their routine.")
+    output("Start it with houserules.npc.start (or start all).")
 
 
-@sims4.commands.Command("bluerabbit477.npc.brain_clear", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.npc.goal", command_type=sims4.commands.CommandType.Live)
+def npc_goal(*words, _connection=None):
+    output = sims4.commands.CheatOutput(_connection)
+    sim_info = services.active_sim_info()
+    if sim_info is None or not words:
+        output("Usage: houserules.npc.goal <what this sim is working towards> (for the selected sim)")
+        return
+    text = " ".join(str(w) for w in words)
+    npc_llm.set_goal(sim_info.sim_id, text)
+    npc_log.log("npc.goal sim {}: {}".format(sim_info.sim_id, text))
+    output("Goal for {}: {}".format(sim_info.first_name, text))
+    output("Start it with houserules.npc.start (or start all).")
+
+
+@sims4.commands.Command("houserules.npc.goal_clear", command_type=sims4.commands.CommandType.Live)
+def npc_goal_clear(opt_sim: OptionalSimInfoParam = None, _connection=None):
+    sim_info = _target(opt_sim, _connection)
+    if sim_info is not None:
+        npc_llm.set_goal(sim_info.sim_id, None)
+        sims4.commands.CheatOutput(_connection)("Cleared {}'s goal.".format(sim_info.first_name))
+
+
+@sims4.commands.Command("houserules.npc.brain_clear", command_type=sims4.commands.CommandType.Live)
 def npc_brain_clear(opt_sim: OptionalSimInfoParam = None, _connection=None):
     sim_info = _target(opt_sim, _connection)
     if sim_info is not None:
@@ -171,18 +273,64 @@ def npc_brain_clear(opt_sim: OptionalSimInfoParam = None, _connection=None):
         sims4.commands.CheatOutput(_connection)("Cleared {}'s description.".format(sim_info.first_name))
 
 
-@sims4.commands.Command("bluerabbit477.npc.brain_show", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.npc.brain_show", command_type=sims4.commands.CommandType.Live)
 def npc_brain_show(opt_sim: OptionalSimInfoParam = None, _connection=None):
     output = sims4.commands.CheatOutput(_connection)
     sim_info = _target(opt_sim, _connection)
     if sim_info is None:
         return
     d = npc_llm.data()
-    output("LLM: {} model {}".format(d["url"], d["model"]))
+    output("LLM: {} model {} (reasoning {})".format(
+        d["url"], d["model"], "on" if d.get("think") else "off"))
+    output("{} goal: {}".format(sim_info.first_name, npc_llm.goal_for(sim_info.sim_id) or "(none)"))
     output("{}: {}".format(sim_info.first_name, npc_llm.instructions_for(sim_info.sim_id) or "(no description)"))
 
 
-@sims4.commands.Command("bluerabbit477.npc.llm", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.npc.think", command_type=sims4.commands.CommandType.Live)
+def npc_think(opt_sim: OptionalSimInfoParam = None, _connection=None):
+    """Show the last prompt and answer - and the model's reasoning, for a thinking model."""
+    output = sims4.commands.CheatOutput(_connection)
+    sim_info = _target(opt_sim, _connection)
+    if sim_info is None:
+        return
+    last = npc_llm.last_for(sim_info.sim_id)
+    if not last:
+        output("No LLM answer for {} yet. Start it with houserules.npc.start.".format(
+            sim_info.first_name))
+        return
+    output("{} - {} (model {})".format(
+        sim_info.first_name, last.get("when", "?"), npc_llm.data()["model"]))
+    output("Prompt:")
+    for line in (last.get("prompt") or "").splitlines():
+        output("  " + line)
+    output("Answer: {}".format(last.get("answer") or "(nothing)"))
+    if last.get("thinking"):
+        output("Thinking:")
+        for line in last["thinking"].splitlines():
+            output("  " + line)
+    if last.get("error"):
+        output("Error: {}".format(last["error"]))
+    output("(also in the npc-routines log)")
+
+
+@sims4.commands.Command("houserules.npc.reasoning", command_type=sims4.commands.CommandType.Live)
+def npc_reasoning(state: str = "", _connection=None):
+    """Turn on a thinking model's working (needs a model that supports it, e.g. qwen3)."""
+    output = sims4.commands.CheatOutput(_connection)
+    d = npc_llm.data()
+    state = (state or "").strip().lower()
+    if state not in ("on", "off"):
+        output("Reasoning is {}. Use: houserules.npc.reasoning on|off "
+               "(only thinking models, e.g. qwen3, return it)".format(
+                   "on" if d.get("think") else "off"))
+        return
+    d["think"] = state == "on"
+    npc_llm.save()
+    output("Reasoning {}.".format(
+        "on - use a thinking model such as qwen3" if d["think"] else "off"))
+
+
+@sims4.commands.Command("houserules.npc.llm", command_type=sims4.commands.CommandType.Live)
 def npc_llm_settings(url: str = "", model: str = "", _connection=None):
     output = sims4.commands.CheatOutput(_connection)
     d = npc_llm.data()
@@ -194,12 +342,17 @@ def npc_llm_settings(url: str = "", model: str = "", _connection=None):
     output("LLM: {} model {}".format(d["url"], d["model"]))
 
 
-@sims4.commands.Command("bluerabbit477.npc.llm_test", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.npc.llm_test", command_type=sims4.commands.CommandType.Live)
 def npc_llm_test(opt_sim: OptionalSimInfoParam = None, _connection=None):
     output = sims4.commands.CheatOutput(_connection)
     sim_info = _target(opt_sim, _connection)
-    if sim_info is None or not npc_llm.instructions_for(sim_info.sim_id):
-        output("Select a sim and give them a description first: bluerabbit477.npc.brain <text>")
+    if sim_info is None or not (npc_llm.instructions_for(sim_info.sim_id)
+                                or npc_llm.goal_for(sim_info.sim_id)):
+        output("Select a sim and give them a goal or description first: "
+               "houserules.npc.goal <text> / houserules.npc.brain <text>")
         return
-    npc_main._ask_llm(sim_info, output)
-    output("Asked. Run bluerabbit477.npc.tick in a moment to apply the answer (or wait for the hourly tick).")
+    if not npc_llm.reachable():
+        output("The local LLM isn't reachable - start start-llm.cmd.")
+        return
+    npc_main._ask_now(sim_info, output)
+    output("Asked. The answer is applied in a few seconds.")

@@ -47,7 +47,10 @@ class EventTally:
         self.events = []
 
     def save(self, path):
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        # Create the parent folder: the game's save folder may not exist on a fresh install.
+        parent = os.path.dirname(os.fspath(path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(self.events, f)
 

@@ -1,0 +1,22 @@
+{
+  "name": "Off-the-Grid Survival",
+  "description": "No money and an empty lot. Live off the land: master gardening and fishing, then build an off-grid home worth §35,000. Bulldoze the lot before you start.",
+  "start": {
+    "money": 0,
+    "skills": {"active": {"Handiness": 2, "Gardening": 2}}
+  },
+  "goals": [
+    {"id": "garden", "type": "skill", "skill": "Gardening", "level": 10, "who": "active",
+     "reward": {"notification": "The garden feeds you now."}},
+    {"id": "fish", "type": "skill", "skill": "Fishing", "level": 10, "who": "active", "requires": ["garden"],
+     "reward": {"notification": "Nothing in the river can hide from you."}},
+    {"id": "home", "type": "home_value", "amount": 35000, "requires": ["fish"],
+     "description": "Build an off-grid home worth §35,000"}
+  ],
+  "deadline_days": 35,
+  "win": "all_goals",
+  "outcomes": {
+    "win": {"notification": "Self-built, self-sufficient, off the grid. You made it."},
+    "lose": {"notification": "The land wins this time."}
+  }
+}

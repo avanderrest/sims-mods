@@ -2,19 +2,23 @@
 are open, whether a goal is met, and winning or losing. scenario_main.py reads the game into
 a plain "facts" dict (see FACTS below) every sim hour and hands it to evaluate().
 
-A scenario file (Mods/BlueRabbit477/scenarios/<name>.json), phase 1:
+A scenario file (Mods/HouseRules/scenarios/<name>.json), phase 1:
   name, description
   start:    money (number = set to; {"add": n}), traits / remove_traits / skills
             ({"active"|"all": ...}), remove_careers (true)
   goals:    [{id, type, ..., who, requires, reward, description}]
   deadline_days, win ("all_goals" or a list of goal ids), outcomes {win, lose}
-  rules:    accepted but not enforced yet (phase 2)
+  rules:    [{id, type, amount, penalty}] - checked every sim hour and when the game
+            layer reports an event (see RULE_TYPES). Each rule breaks once per scenario.
 
 FACTS (built by the game layer, plain data):
   day                 days since the scenario started (float)
   money, home_value   household funds / home lot value
   household_size, children
   active              sim id the scenario started with
+  has_cheated         the household's own "has cheated" flag
+  build_buy_spend     most spent in one Build/Buy visit since the scenario started
+  travelled           the household has changed zone since the scenario started
   sims: {sim_id: {"skills": {name: level}, "careers": [[tuning name, level]],
                   "friendship": best friendship score, "romance": best romance score,
                   "married": bool, "aspirations": [finished aspiration track names]}}
@@ -35,6 +39,11 @@ RELATIONSHIP_LEVELS = {
 }
 REWARD_KEYS = ("money", "trait", "notification")
 START_KEYS = ("money", "traits", "remove_traits", "skills", "remove_careers")
+RULE_TYPES = ("no_career", "no_cheats", "max_purchase", "max_money", "no_leaving_lot")
+PENALTY_TYPES = ("warning", "money", "moodlet", "fail")
+PENALTY_KEYS = ("type", "amount", "buff")
+# Rules that need an amount in the file.
+_RULE_AMOUNTS = ("max_purchase", "max_money")
 
 
 class ScenarioError(ValueError):
@@ -105,8 +114,7 @@ def validate(data):
             errors.append("outcomes: unknown \"{}\" (win or lose)".format(name))
         else:
             _check_reward(outcome, "outcomes." + name, errors)
-    if data.get("rules"):
-        warnings.append("rules aren't checked yet (that's phase 2): they're shown, not enforced")
+    _check_rules(data.get("rules"), errors)
 
     if errors:
         raise ScenarioError("; ".join(errors))
@@ -135,6 +143,48 @@ def _check_reward(reward, where, errors):
             errors.append("{}: unknown \"{}\" (known: {})".format(where, key, ", ".join(REWARD_KEYS)))
 
 
+def _check_penalty(penalty, where, errors):
+    if not isinstance(penalty, dict):
+        errors.append("{}: must be an object".format(where))
+        return
+    kind = penalty.get("type")
+    if kind not in PENALTY_TYPES:
+        errors.append("{}: unknown type \"{}\" (known: {})".format(where, kind, ", ".join(PENALTY_TYPES)))
+        return
+    for key in penalty:
+        if key not in PENALTY_KEYS:
+            errors.append("{}: unknown \"{}\" (known: {})".format(where, key, ", ".join(PENALTY_KEYS)))
+    if kind == "money" and not _is_number(penalty.get("amount")):
+        errors.append("{}: a money penalty needs an \"amount\"".format(where))
+    if kind == "moodlet" and not penalty.get("buff"):
+        errors.append("{}: a moodlet penalty needs a \"buff\" name".format(where))
+
+
+def _check_rules(rules, errors):
+    if rules is None:
+        return
+    if not isinstance(rules, list):
+        errors.append("\"rules\" must be a list")
+        return
+    seen = set()
+    for i, rule in enumerate(rules):
+        where = "rule {}".format(rule.get("id") if isinstance(rule, dict) and rule.get("id") else i + 1)
+        if not isinstance(rule, dict):
+            errors.append("{}: must be an object".format(where))
+            continue
+        rid = rule.get("id") or rule.get("type")
+        if rid in seen:
+            errors.append("{}: id used twice".format(where))
+        seen.add(rid)
+        rtype = rule.get("type")
+        if rtype not in RULE_TYPES:
+            errors.append("{}: unknown type \"{}\" (known: {})".format(where, rtype, ", ".join(RULE_TYPES)))
+            continue
+        if rtype in _RULE_AMOUNTS and not (_is_number(rule.get("amount")) and rule["amount"] > 0):
+            errors.append("{}: a {} rule needs a positive \"amount\"".format(where, rtype))
+        _check_penalty(rule.get("penalty") or {"type": "warning"}, where + " penalty", errors)
+
+
 def _check_goal(goal, where, errors):
     gtype = goal.get("type")
     if gtype not in GOAL_TYPES:
@@ -157,7 +207,7 @@ def _check_goal(goal, where, errors):
 
 def new_progress(scenario, file_name, start_day, active_sim_id):
     return {"scenario": file_name, "name": scenario["name"], "start_day": start_day,
-            "active": active_sim_id, "done": [], "state": "running"}
+            "active": active_sim_id, "done": [], "broken": [], "state": "running"}
 
 
 def goal_by_id(scenario, gid):
@@ -174,6 +224,70 @@ def is_unlocked(goal, done):
 def open_goals(scenario, done):
     """Goals not done yet whose required goals are all done (the ones shown and checked)."""
     return [g for g in scenario["goals"] if g["id"] not in done and is_unlocked(g, done)]
+
+
+# --- Rules -----------------------------------------------------------------------------
+
+def rule_id(rule):
+    """A rule's name in progress: its "id", or the type (so `max_money` is unique)."""
+    return rule.get("id") or rule.get("type")
+
+
+def rule_by_id(scenario, rid):
+    for rule in scenario.get("rules") or ():
+        if rule_id(rule) == rid:
+            return rule
+    return None
+
+
+def penalty_of(rule):
+    return rule.get("penalty") or {"type": "warning"}
+
+
+def rule_met(rule, facts):
+    """Whether this rule has been broken, judged on the facts alone."""
+    rtype = rule.get("type")
+    if rtype == "no_career":
+        return any(s.get("careers") for s in facts.get("sims", {}).values())
+    if rtype == "no_cheats":
+        return bool(facts.get("has_cheated"))
+    if rtype == "max_money":
+        return facts.get("money", 0) > rule["amount"]
+    if rtype == "max_purchase":
+        return facts.get("build_buy_spend", 0) > rule["amount"]
+    if rtype == "no_leaving_lot":
+        return bool(facts.get("travelled"))
+    return False
+
+
+def broken_rules(scenario, progress, facts):
+    """Ids of rules broken now that hadn't been broken yet (each breaks once)."""
+    already = set(progress.get("broken") or ())
+    return [rule_id(rule) for rule in scenario.get("rules") or ()
+            if rule_id(rule) not in already and rule_met(rule, facts)]
+
+
+def describe_rule(rule):
+    rtype = rule.get("type")
+    return {
+        "no_career": "no job",
+        "no_cheats": "no money or skill cheats",
+        "max_purchase": "spend at most §{} in one Build/Buy visit".format(rule.get("amount")),
+        "max_money": "hold at most §{}".format(rule.get("amount")),
+        "no_leaving_lot": "stay on the home lot",
+    }.get(rtype, rtype)
+
+
+def penalty_text(rule):
+    penalty = penalty_of(rule)
+    kind = penalty["type"]
+    if kind == "money":
+        return "fine of §{}".format(abs(int(penalty["amount"])))
+    if kind == "moodlet":
+        return "moodlet {}".format(penalty["buff"])
+    if kind == "fail":
+        return "the scenario is lost"
+    return "a warning"
 
 
 def _sims_for(goal, facts):

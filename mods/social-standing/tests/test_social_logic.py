@@ -71,10 +71,20 @@ def test_friendship_combines_both():
     assert friendship_multiplier(0.0, 2.0) == pytest.approx(0.4 * status_gap_multiplier(2.0))
 
 
-def test_romance_only_cares_about_status():
-    assert romance_multiplier(0.0) == 1.0
-    assert romance_multiplier(3.0) < 1.0
-    assert romance_multiplier(3.0, family=True) == 1.0
+def test_romance_is_affected_by_compatibility():
+    assert romance_multiplier(-1.0, 0.0) < romance_multiplier(0.0, 0.0) < romance_multiplier(1.0, 0.0)
+    assert romance_multiplier(1.0, 0.0) == pytest.approx(1.0)
+    # Enemies still gain something: romance is gentler than friendship.
+    assert romance_multiplier(-1.0, 0.0) > 0.0
+
+
+def test_romance_still_cares_about_status():
+    assert romance_multiplier(0.0, 3.0) < romance_multiplier(0.0, 0.0)
+    assert romance_multiplier(0.0, 3.0) == pytest.approx(0.7 * status_gap_multiplier(3.0))
+
+
+def test_romance_ignores_compatibility_and_status_for_family():
+    assert romance_multiplier(-1.0, 3.0, family=True) == 1.0
 
 
 def test_starstruck_only_for_the_lower_sim():

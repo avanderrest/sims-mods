@@ -51,7 +51,7 @@ the aspiration and level you currently have selected (Amber, 2026-10-09). Exampl
    reward) so it can't slip through when the final level is completed out of order.
 7. **All ages:** child and teen aspirations too (Amber, 2026-10-09), not only adult ones. Each
    sim tracks the aspirations available to their own age.
-8. Cheat `bluerabbit477.asp.status`: lists goals already done for milestones you haven't reached.
+8. Cheat `houserules.asp.status`: lists goals already done for milestones you haven't reached.
 
 ## Open questions
 

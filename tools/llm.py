@@ -4,7 +4,7 @@ What to install is declared in llm.json at the repo root, like npm's package.jso
 
   py tools/llm.py install   - install the backend (winget) and download its model; run once
   py tools/llm.py start     - start the server if it isn't running, load the model, and point
-                              the mod at it (Mods/BlueRabbit477/data/npc_brain.json)
+                              the mod at it (Mods/HouseRules/data/npc_brain.json)
   py tools/llm.py status    - is it running, and is the model there?
   add --backend lmstudio to any of them to use the other one for that run
 
@@ -34,13 +34,22 @@ _KNOWN_PATHS = {
     "lms": [Path.home() / ".lmstudio" / "bin" / "lms.exe"],
 }
 _LMSTUDIO_APP = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "LM Studio" / "LM Studio.exe"
+DOWNLOAD_URLS = {
+    "ollama": "https://ollama.com/download",
+    "lmstudio": "https://lmstudio.ai",
+}
 
 
 def load_manifest(backend=None):
-    data = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    name = backend or data["backend"]
-    if name not in data["backends"]:
-        sys.exit("llm.json has no backend '{}' (has: {})".format(name, ", ".join(data["backends"])))
+    try:
+        data = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    except Exception as e:
+        sys.exit("Can't read {} ({}). Restore that file from the repository, then try again."
+                 .format(MANIFEST, e))
+    name = backend or data.get("backend")
+    if name not in data.get("backends", {}):
+        sys.exit("llm.json has no backend '{}' (has: {}). Check the 'backend' entry."
+                 .format(name, ", ".join(data.get("backends", {})) or "none"))
     return name, data["backends"][name]
 
 
@@ -83,8 +92,17 @@ def models_on_server(name, conf):
 
 
 def has_model(names, model):
-    # Ollama lists "llama3.2:latest" for "llama3.2".
+    # Ollama adds ":latest" when the tag is left out ("qwen2.5:14b" -> "qwen2.5:14b:latest").
     return any(n == model or n.split(":")[0] == model for n in names or ())
+
+
+def choose_model(names, configured):
+    """The model to use: the configured one if it's there, otherwise any chat model the server has.
+    Embedding-only models can't answer, so they're skipped. None if the server has nothing usable."""
+    if has_model(names, configured):
+        return configured
+    usable = [n for n in names or () if "embed" not in n.lower()]
+    return usable[0] if usable else None
 
 
 def wait_for_server(name, conf):
@@ -109,9 +127,15 @@ def install(name, conf):
     exe = find_exe("ollama" if name == "ollama" else "lms")
     if exe is None and not (name == "lmstudio" and _LMSTUDIO_APP.exists()):
         print("Installing {} with winget...".format(name))
-        if run("winget", "install", "--id", conf["winget"], "-e",
+        winget = shutil.which("winget")
+        if winget is None:
+            sys.exit("winget isn't available, so {} can't be installed automatically.\n"
+                     "Install it by hand from {} , then run this again."
+                     .format(name, DOWNLOAD_URLS.get(name, "")))
+        if run(winget, "install", "--id", conf["winget"], "-e",
                "--accept-package-agreements", "--accept-source-agreements") != 0:
-            sys.exit("winget couldn't install {}. Install it by hand, then run this again.".format(name))
+            sys.exit("winget couldn't install {}. Install it by hand from {} , then run this again."
+                     .format(name, DOWNLOAD_URLS.get(name, "")))
     else:
         print("{} is already installed.".format(name))
 
@@ -136,7 +160,8 @@ def download_model(name, conf):
     else:
         code = run(find_exe("lms"), "get", model, "--yes")
     if code != 0:
-        sys.exit("Downloading {} failed.".format(model))
+        sys.exit("Downloading {} failed. Check the internet connection and free disk space "
+                 "(a few GB per model), then run: py tools/llm.py install".format(model))
 
 
 def _lms_has(model):
@@ -167,27 +192,32 @@ def start_server(name, conf):
         print("Starting LM Studio's server...")
         run(exe, "server", "start")
     if not wait_for_server(name, conf):
-        sys.exit("{} didn't answer within {}s. See {}".format(name, START_TIMEOUT, SERVER_LOG))
+        sys.exit("{} didn't answer within {}s.\n"
+                 "Check that port {} is free, then run: py tools/llm.py start\n"
+                 "Server log: {}".format(name, START_TIMEOUT,
+                                         server_root(conf["url"]).rsplit(":", 1)[-1], SERVER_LOG))
 
 
 def start(name, conf):
     start_server(name, conf)
-    model = conf["model"]
+    names = models_on_server(name, conf)
+    model = choose_model(names, conf["model"])
+    if model is None:
+        sys.exit("No model is downloaded ({}). Run: py tools/llm.py install".format(conf["model"]))
+    if model != conf["model"]:
+        print("{} isn't pulled; using {} instead.".format(conf["model"], model))
     if name == "ollama":
-        if not has_model(models_on_server(name, conf), model):
-            sys.exit("Model {} isn't downloaded yet. Run: py tools/llm.py install".format(model))
         # Load it into memory now, so the first in-game question doesn't wait on it.
         print("Loading {}...".format(model))
         _post(server_root(conf["url"]) + "/api/generate", {"model": model, "keep_alive": "60m"})
-    else:
-        if not has_model(models_on_server(name, conf), model):
-            print("Loading {}...".format(model))
-            if run(find_exe("lms"), "load", model, "--yes") != 0:
-                sys.exit("Couldn't load {}. Run: py tools/llm.py install --backend lmstudio".format(model))
-    point_mod_at(conf)
+    elif not has_model(names, model):
+        print("Loading {}...".format(model))
+        if run(find_exe("lms"), "load", model, "--yes") != 0:
+            sys.exit("Couldn't load {}. Run: py tools/llm.py install --backend lmstudio".format(model))
+    point_mod_at(conf, model)
     print("Ready: {} with {}. Start the game (or, if it's already running, type the cheat below).".format(
         name, model))
-    print("  bluerabbit477.npc.llm {} {}".format(conf["url"], model))
+    print("  houserules.npc.llm {} {}".format(conf["url"], model))
 
 
 def _post(url, body, timeout=120):
@@ -200,15 +230,15 @@ def _post(url, body, timeout=120):
         print("  (warming up the model failed: {}; the game will load it on first use)".format(e))
 
 
-def point_mod_at(conf):
+def point_mod_at(conf, model):
     """Writes url/model into the mod's settings, keeping each sim's instructions. The mod reads
-    this file once per game start; a running game needs the bluerabbit477.npc.llm cheat instead."""
+    this file once per game start; a running game needs the houserules.npc.llm cheat instead."""
     data = {"sims": {}}
     if BRAIN_FILE.exists():
         data.update(json.loads(BRAIN_FILE.read_text(encoding="utf-8")))
-    if data.get("url") == conf["url"] and data.get("model") == conf["model"]:
+    if data.get("url") == conf["url"] and data.get("model") == model:
         return
-    data["url"], data["model"] = conf["url"], conf["model"]
+    data["url"], data["model"] = conf["url"], model
     BRAIN_FILE.parent.mkdir(parents=True, exist_ok=True)
     BRAIN_FILE.write_text(json.dumps(data, indent=1), encoding="utf-8")
     print("Pointed the mod at it ({}).".format(BRAIN_FILE))
@@ -221,13 +251,18 @@ def status(name, conf):
     print("installed: {}".format("yes" if installed else "no  -> py tools/llm.py install"))
     print("running:   {}".format("no  -> py tools/llm.py start" if names is None else
                                  "yes, at " + server_root(conf["url"])))
+    model = choose_model(names, conf["model"])
     if names is not None:
-        print("model:     {} {}".format(conf["model"], "ready" if has_model(names, conf["model"]) else
-                                        "NOT available -> py tools/llm.py install / start"))
+        if model is None:
+            print("model:     none pulled -> py tools/llm.py install")
+        elif model == conf["model"]:
+            print("model:     {} ready".format(model))
+        else:
+            print("model:     {} not pulled; will use {}".format(conf["model"], model))
     if BRAIN_FILE.exists():
         brain = json.loads(BRAIN_FILE.read_text(encoding="utf-8"))
         print("mod uses:  {} {}".format(brain.get("url"), brain.get("model")))
-    return 0 if names is not None and has_model(names, conf["model"]) else 1
+    return 0 if model is not None else 1
 
 
 def main():
@@ -245,4 +280,13 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except Exception as e:
+        sys.exit("Unexpected error: {}: {}.\n"
+                 "Run 'py tools/llm.py status' for details, or check llm.json and the paths "
+                 "in tools/config.py.".format(type(e).__name__, e))

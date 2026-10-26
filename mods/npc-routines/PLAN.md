@@ -32,11 +32,11 @@ The Sims 4 only fully simulates sims who are **on the loaded lot**. Sims in othe
   to load the routines file and (re-)start an hourly alarm; each tick, for every NPC-mode sim
   that's actually on the loaded lot (`sim_info.get_sim_instance()`), looks up the due activity and
   pushes its interaction at `Priority.Low`. Routines persist to
-  `Mods/BlueRabbit477/data/npc_routines.json`.
+  `Mods/HouseRules/data/npc_routines.json`.
 - Commands, all working on the selected sim by default (`OptionalTargetParam`/`get_optional_target`,
-  same pattern as EA's own `clubs.add_sim_to_club`): `bluerabbit477.npc.on` / `.npc.off`,
-  `bluerabbit477.routine.add <days> <start_hour> <length_hours> <activity>` (days: `mon,wed,fri`
-  or `1,3,5`), `bluerabbit477.routine.show`, `bluerabbit477.routine.clear`.
+  same pattern as EA's own `clubs.add_sim_to_club`): `houserules.npc.on` / `.npc.off`,
+  `houserules.routine.add <days> <start_hour> <length_hours> <activity>` (days: `mon,wed,fri`
+  or `1,3,5`), `houserules.routine.show`, `houserules.routine.clear`.
 - Five starter activities: workout, paint, read, chess, jog. The affordance tuning name for each
   is an unverified guess — see "what's confirmed vs. still a guess" above.
 - **Not yet checked against a real game** — see TESTING.md section 3 for exactly what to try and
@@ -50,6 +50,7 @@ The Sims 4 only fully simulates sims who are **on the loaded lot**. Sims in othe
 
 ### Phase 4: Local LLM brain (optional, idea 1.2)
 - The player writes free-text instructions per sim. Every few sim-hours, or when the sim is idle, the mod builds a prompt containing: the sim's traits, mood, needs, skills, job, relationships, the time and day, the instructions, and a **numbered list of allowed actions**. The local LLM (Ollama / LM Studio on `localhost`) answers with one action number and a short reason.
+- A separate per-sim **goal** (`houserules.npc.goal`) is included in the prompt. The brain does not start on its own: `houserules.npc.start [name|all]` turns NPC mode on and asks immediately for the selected sim, a named household sim, or everyone. After that it keeps deciding hourly until `houserules.npc.stop`. If the server can't be reached, the player gets one notification and the sim falls back to their routine instead of standing idle.
 - The HTTP call runs in a background thread so the game never freezes. The answer is put in a queue, and the next in-game alarm applies it on the game's main thread, since the game's state may only be touched from there.
 - Safety: the model can only choose from the list we give it. Anything else is ignored, and we fall back to the routine or normal autonomy. If the LLM server isn't running, the mod just uses routines.
 - Optional: show the reason in a notification ("Mira is going to the gym because she wants to feel confident before her date").

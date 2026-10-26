@@ -8,7 +8,8 @@
     "remove_careers": true
   },
   "rules": [
-    {"type": "no_career", "penalty": {"type": "warning"}}
+    {"type": "no_career", "penalty": {"type": "warning"}},
+    {"type": "max_purchase", "amount": 500, "penalty": {"type": "money", "amount": -200}}
   ],
   "goals": [
     {"id": "art", "type": "skill", "skill": "Painting", "level": 6, "who": "active",

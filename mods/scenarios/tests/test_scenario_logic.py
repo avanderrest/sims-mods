@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from scenario_logic import (ScenarioError, describe_goal, evaluate, goal_value, new_progress, open_goals,
-                            outcome, parse, validate)
+from scenario_logic import (ScenarioError, broken_rules, describe_goal, describe_rule, evaluate, goal_value,
+                            new_progress, open_goals, outcome, parse, penalty_text, rule_met, validate)
 
 RAGS = {
     "name": "Rags to Riches",
@@ -27,10 +27,10 @@ def facts(**kw):
     return base
 
 
-def test_example_file_is_valid_and_warns_about_rules():
+def test_example_file_is_valid_without_warnings():
     scenario, warnings = parse(json.dumps(RAGS))
     assert scenario["name"] == "Rags to Riches"
-    assert any("phase 2" in w for w in warnings)
+    assert warnings == []
 
 
 @pytest.mark.parametrize("change, message", [
@@ -115,6 +115,57 @@ def test_describe_goal_shows_progress():
     goal = {"id": "art", "type": "skill", "skill": "Painting", "level": 6}
     assert describe_goal(goal, facts(sims={1: {"skills": {"Painting": 4}}})) == "art: Painting level 6 - 4/6"
     assert describe_goal(dict(goal, description="Become a painter")) == "art: Become a painter"
+
+
+@pytest.mark.parametrize("rules, message", [
+    ([{"type": "no_fun"}], "unknown type"),
+    ([{"type": "max_money"}], "positive"),
+    ([{"type": "max_purchase", "amount": 0}], "positive"),
+    ([{"type": "no_career", "penalty": {"type": "banana"}}], "unknown type"),
+    ([{"type": "no_career", "penalty": {"type": "money"}}], "amount"),
+    ([{"type": "no_career", "penalty": {"type": "moodlet"}}], "buff"),
+    ([{"type": "no_career", "penalty": {"type": "money", "amount": -5, "extra": 1}}], "unknown"),
+    ([{"type": "no_career"}, {"type": "no_career"}], "twice"),
+])
+def test_broken_rules_are_refused_with_the_reason(rules, message):
+    with pytest.raises(ScenarioError) as e:
+        validate(dict(RAGS, rules=rules))
+    assert message in str(e.value)
+
+
+def test_rules_detect_what_they_should():
+    career = facts(sims={1: {"careers": [["career_Adult_Painter", 1]]}})
+    assert rule_met({"type": "no_career"}, career)
+    assert not rule_met({"type": "no_career"}, facts())
+    assert rule_met({"type": "no_cheats"}, facts(has_cheated=True))
+    assert not rule_met({"type": "no_cheats"}, facts())
+    assert rule_met({"type": "max_money", "amount": 100}, facts(money=101))
+    assert not rule_met({"type": "max_money", "amount": 100}, facts(money=100))
+    assert rule_met({"type": "max_purchase", "amount": 500}, facts(build_buy_spend=600))
+    assert not rule_met({"type": "max_purchase", "amount": 500}, facts(build_buy_spend=500))
+    assert rule_met({"type": "no_leaving_lot"}, facts(travelled=True))
+    assert not rule_met({"type": "no_leaving_lot"}, facts())
+
+
+def test_each_rule_breaks_once():
+    scenario = dict(RAGS, rules=[{"type": "max_money", "amount": 100}])
+    progress = new_progress(scenario, "rags", 0, 1)
+    assert broken_rules(scenario, progress, facts(money=200)) == ["max_money"]
+    progress["broken"].append("max_money")
+    assert broken_rules(scenario, progress, facts(money=200)) == []
+
+
+def test_rule_descriptions_and_penalties():
+    rule = {"type": "max_purchase", "amount": 500, "penalty": {"type": "money", "amount": -200}}
+    assert describe_rule(rule) == "spend at most §500 in one Build/Buy visit"
+    assert penalty_text(rule) == "fine of §200"
+    assert describe_rule({"type": "no_career"}) == "no job"
+    assert penalty_text({"type": "no_career"}) == "a warning"
+    assert penalty_text({"type": "no_career", "penalty": {"type": "fail"}}) == "the scenario is lost"
+
+
+def test_new_progress_has_no_broken_rules():
+    assert new_progress(RAGS, "rags", 0, 1)["broken"] == []
 
 
 def test_shipped_example_scenarios_are_valid():

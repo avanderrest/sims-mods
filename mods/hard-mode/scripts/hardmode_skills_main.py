@@ -7,7 +7,7 @@ which EA computes in ContinuousStatistic._get_change_rate_without_decay. One-off
 Skill class only: the multiplier is damped (moods help less) and our aptitude factor applied.
 Child/toddler skills only get the damping; aptitude is for adult skills.
 
-Cheat: bluerabbit477.hard.skills [sim] - the sim's talents, trait affinities and current factors.
+Cheat: houserules.hard.skills [sim] - the sim's talents, trait affinities and current factors.
 """
 import sims4.commands
 from server_commands.argument_helpers import OptionalSimInfoParam, get_optional_target
@@ -80,7 +80,7 @@ Skill.get_statistic_multiplier_increase = get_statistic_multiplier_increase
 hardmode_log.log("skill aptitude hooks installed")
 
 
-@sims4.commands.Command("bluerabbit477.hard.skills", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.hard.skills", command_type=sims4.commands.CommandType.Live)
 def hard_skills(opt_sim: OptionalSimInfoParam = None, _connection=None):
     output = sims4.commands.CheatOutput(_connection)
     sim_info = get_optional_target(opt_sim, _connection, target_type=OptionalSimInfoParam)

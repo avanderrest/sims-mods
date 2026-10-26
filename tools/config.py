@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 # Prefix put on every built file so our mods are easy to spot in the Mods folder.
-CREATOR = os.environ.get("S4_CREATOR", "BlueRabbit477")
+CREATOR = os.environ.get("S4_CREATOR", "HouseRules")
 
 
 def _game_dir():

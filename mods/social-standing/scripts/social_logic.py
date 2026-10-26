@@ -5,8 +5,8 @@ Friendship gain between two sims is multiplied by:
   x status_gap_multiplier(gap)             - a big gap in wealth/fame/title slows it down
 unless they're family or already know each other well (friendship >= KNOWN_WELL).
 
-Romance gain only gets the status-gap part: who clicks romantically is the game's own
-business (Lovestruck already has its own compatibility for that).
+Romance gain gets a gentler compatibility curve (enemies can still fall in love, just much
+more slowly) times the same status-gap multiplier.
 """
 import math
 
@@ -71,6 +71,15 @@ def compatibility_multiplier(score):
     return _interpolate(COMPATIBILITY_CURVE, score)
 
 
+# Romance is less picky than friendship (enemies can still fall in love), so it gets its
+# own, higher curve. Even -1 compatibility leaves some gain, unlike friendship.
+ROMANCE_COMPATIBILITY_CURVE = ((-1.0, 0.25), (-0.5, 0.4), (0.0, 0.7), (0.5, 1.0), (1.0, 1.0))
+
+
+def romance_compatibility_multiplier(score):
+    return _interpolate(ROMANCE_COMPATIBILITY_CURVE, score)
+
+
 # --- Status ---------------------------------------------------------------------------
 FAME_PER_STAR = 0.8          # one celebrity star ~ 6x the wealth
 NOBLE_PER_LEVEL = 0.6        # each rank of the game's noble career
@@ -105,10 +114,10 @@ def friendship_multiplier(compat, gap, family=False, current_friendship=0):
     return compatibility_multiplier(compat) * status_gap_multiplier(gap)
 
 
-def romance_multiplier(gap, family=False):
+def romance_multiplier(compat, gap, family=False):
     if family:
         return 1.0
-    return status_gap_multiplier(gap)
+    return romance_compatibility_multiplier(compat) * status_gap_multiplier(gap)
 
 
 def is_starstruck(status_self, status_other):

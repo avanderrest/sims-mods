@@ -15,6 +15,7 @@ Then everything is copied to Mods/<creator>/ unless --no-install is given.
 Script files may sit at most one folder deep inside Mods, which is why we use one flat folder.
 """
 import os
+import filecmp
 import py_compile
 import shutil
 import sys
@@ -25,6 +26,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402
 import tuning  # noqa: E402
+
+
+def _identical(a, b):
+    """True when b already has a's exact contents, so copying it would change nothing."""
+    try:
+        return a.stat().st_size == b.stat().st_size and filecmp.cmp(str(a), str(b), shallow=False)
+    except OSError:
+        return False
 
 
 def build_scripts(mod_dir, out_file):
@@ -89,13 +98,20 @@ def main(argv):
         dest = config.MODS_DIR / config.CREATOR
         dest.mkdir(parents=True, exist_ok=True)
         for f in built:
-            shutil.copy2(f, dest / f.name)
+            target = dest / f.name
+            if _identical(f, target):
+                # Already installed byte-for-byte. Not copying also means a running game
+                # holding the file open cannot fail the build for nothing.
+                print("unchanged", target.relative_to(dest))
+                continue
+            shutil.copy2(f, target)
         for mod_dir in mod_dirs:
             extra = mod_dir / "install"
             for f in sorted(p for p in extra.rglob("*") if p.is_file()):
                 target = dest / f.relative_to(extra)
                 target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(f, target)
+                if not _identical(f, target):
+                    shutil.copy2(f, target)
                 print("installed", target.relative_to(dest))
         print("installed to", dest)
         print("Make sure Script Mods are enabled in Game Options > Other, then restart the game.")

@@ -1,6 +1,6 @@
 """Hard Mode: life and relationships - game layer. The rules are in hardmode_life.py.
 
-Setting: bluerabbit477.hard.set life on|off
+Setting: houserules.hard.set life on|off
 
 Hooks:
 - RelationshipTrack.get_decay_rate: friendship/romance tracks fade faster. EA's decay alarms

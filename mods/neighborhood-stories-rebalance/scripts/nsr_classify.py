@@ -8,19 +8,27 @@ householdStoryArc_MoveOut, simStoryArc_ChildrenStories_Pregnancy.
 
 # EA's arc weights are small ints (mostly 1, a few 2/3/10) with a tuned minimum of 1, so a
 # multiplier below 1 can't lower a weight of 1. Instead every weight is first scaled up by
-# BASE_SCALE and the multipliers apply on top: a weight-1 child adoption stays at 1 while
+# BASE_SCALE and the multiplier applies on top: a weight-1 child adoption stays at 1 while
 # everything else becomes 10+, which makes it ~10x rarer relative to the other arcs.
 # Weights are only relative within a pass, so scaling everything equally changes nothing else.
+# Move-out, move-in, horse adoption and careers are left at 1.0: their passes have only one
+# arc (or only one category), so changing their weights cannot change how often they happen.
+# They are handled by the age-up logic and action gates in nsr_main.py instead.
 BASE_SCALE = 10
 MIN_WEIGHT = 1
 
 MULTIPLIERS = {
     "adopt_child": 0.1,
-    "adopt_horse": 0.05,
+    "adopt_horse": 1.0,
     "adopt_pet": 1.0,
-    "move_out": 3.0,
-    "move_in": 2.0,
+    "move_out": 1.0,
+    "move_in": 1.0,
     "pregnancy": 1.0,
+    "friend_start": 2.0,
+    "friend_gain": 2.667,
+    "friend_loss": 2.667,
+    "friend_best": 0.4,
+    "friend_despised": 0.4,
     "other": 1.0,
 }
 
@@ -30,6 +38,12 @@ _NAME_RULES = (
     ("adoptacat", "adopt_pet"),
     ("adoptadog", "adopt_pet"),
     ("adopt", "adopt_child"),  # AdoptABaby / AdoptAToddler / AdoptAChild
+    ("becomingbestfriends", "friend_best"),
+    ("becomingdespised", "friend_despised"),
+    ("friendshipgian", "friend_gain"),  # EA's actual tuning name
+    ("friendshipgain", "friend_gain"),
+    ("friendshiploss", "friend_loss"),
+    ("becomingfriends", "friend_start"),
     ("moveout", "move_out"),
     ("movein", "move_in"),
     ("pregnancy", "pregnancy"),

@@ -14,9 +14,12 @@ from pathlib import Path
 import dbpf
 
 # Tuning resource types, by the i="..." attribute of the instance.
+# The last three are also used by tools/scenario_export.py for the Scenarios menu.
 TUNING_TYPES = {
     "interaction": 0xE882D22F,
     "snippet": 0x7DF2169C,
+    "situation_goal": 1502554343,   # Types.SITUATION_GOAL
+    "action": 209137191,            # Types.ACTION (LootActions)
 }
 STBL_TYPE = 0x220557DA
 STBL_GROUP = 0x80000000

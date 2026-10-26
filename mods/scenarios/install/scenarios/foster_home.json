@@ -1,0 +1,26 @@
+{
+  "name": "Full House: Foster Care",
+  "description": "One adult, seven children and §10,000. Get all seven to grade A at school and reach §30,000 in the bank within 28 days. Create the household of eight before starting.",
+  "start": {
+    "money": 10000
+  },
+  "goals": [
+    {"id": "grade_1", "type": "custom", "description": "Child 1 reaches grade A at school (tick it yourself)"},
+    {"id": "grade_2", "type": "custom", "description": "Child 2 reaches grade A at school (tick it yourself)"},
+    {"id": "grade_3", "type": "custom", "description": "Child 3 reaches grade A at school (tick it yourself)"},
+    {"id": "grade_4", "type": "custom", "description": "Child 4 reaches grade A at school (tick it yourself)"},
+    {"id": "grade_5", "type": "custom", "description": "Child 5 reaches grade A at school (tick it yourself)"},
+    {"id": "grade_6", "type": "custom", "description": "Child 6 reaches grade A at school (tick it yourself)"},
+    {"id": "grade_7", "type": "custom", "description": "Child 7 reaches grade A at school (tick it yourself)"},
+    {"id": "savings", "type": "household_money", "amount": 30000,
+     "requires": ["grade_1", "grade_2", "grade_3", "grade_4", "grade_5", "grade_6", "grade_7"],
+     "description": "Keep the household afloat with §30,000 in the bank",
+     "reward": {"notification": "Seven report cards, all A. And the bills are paid."}}
+  ],
+  "deadline_days": 28,
+  "win": "all_goals",
+  "outcomes": {
+    "win": {"notification": "A full house, every child thriving. The foster home made it."},
+    "lose": {"notification": "The month is over and not every report card made it."}
+  }
+}

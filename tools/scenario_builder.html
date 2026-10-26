@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HouseRules Scenario Builder</title>
+<style>
+  :root { --bg:#14161a; --panel:#1d2026; --line:#30343d; --ink:#e8eaf0; --dim:#9aa2b1; --accent:#6ea8fe; --warn:#e0b341; --bad:#ef6b6b; --ok:#6fd08c; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.45 "Segoe UI", system-ui, sans-serif; color:var(--ink); background:var(--bg); }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; gap:16px; align-items:baseline; }
+  header h1 { margin:0; font-size:17px; }
+  header .path { color:var(--dim); font-size:12px; }
+  main { display:grid; grid-template-columns:270px 1fr; min-height:calc(100vh - 58px); }
+  aside { border-right:1px solid var(--line); padding:14px; }
+  aside h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin:16px 0 6px; }
+  aside h2:first-child { margin-top:0; }
+  .scenario-link { display:block; width:100%; text-align:left; background:transparent; border:0; color:var(--ink); padding:6px 8px; border-radius:6px; cursor:pointer; }
+  .scenario-link:hover { background:var(--panel); }
+  .scenario-link small { color:var(--dim); display:block; }
+  section { padding:18px 22px 110px; max-width:980px; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+  .field { display:flex; flex-direction:column; gap:4px; min-width:140px; flex:1; }
+  .field.narrow { flex:0 0 120px; min-width:100px; }
+  label { font-size:12px; color:var(--dim); }
+  input, select, textarea { background:#0f1115; color:var(--ink); border:1px solid var(--line); border-radius:5px; padding:6px 8px; font:inherit; }
+  textarea { width:100%; min-height:90px; resize:vertical; font-family:ui-monospace, Consolas, monospace; font-size:12px; }
+  button { background:#262b33; color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:7px 12px; font:inherit; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); color:#0b1220; border-color:var(--accent); font-weight:600; }
+  button.danger { color:var(--bad); }
+  .card { border:1px solid var(--line); border-radius:8px; background:var(--panel); padding:12px; margin-bottom:10px; }
+  .card .card-head { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+  .card .card-head strong { flex:1; }
+  .hint { color:var(--dim); font-size:12px; margin:4px 0 12px; }
+  .checks { display:flex; gap:16px; align-items:center; }
+  .checks label { display:flex; gap:6px; align-items:center; color:var(--ink); font-size:13px; }
+  .actions { position:sticky; bottom:0; background:linear-gradient(transparent, var(--bg) 30%); padding:14px 0; display:flex; gap:10px; flex-wrap:wrap; }
+  .report { border:1px solid var(--line); border-radius:8px; padding:12px; margin-top:12px; display:none; }
+  .report.show { display:block; }
+  .report h3 { margin:0 0 6px; font-size:13px; }
+  .report ul { margin:4px 0 10px; padding-left:20px; }
+  .report .error { color:var(--bad); }
+  .report .warn { color:var(--warn); }
+  .report .note { color:var(--dim); }
+  .ok { color:var(--ok); }
+  .json-box { display:none; margin-top:14px; }
+  .json-box.show { display:block; }
+  hr { border:0; border-top:1px solid var(--line); margin:20px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Scenario Builder</h1>
+  <span class="path" id="paths"></span>
+</header>
+<main>
+  <aside>
+    <h2>Installed</h2>
+    <div id="installed"></div>
+    <h2>Examples</h2>
+    <div id="examples"></div>
+    <div style="margin-top:18px; display:flex; flex-direction:column; gap:8px;">
+      <button onclick="newScenario()">New scenario</button>
+      <button onclick="refreshList()">Refresh list</button>
+    </div>
+    <p class="hint" style="margin-top:18px;">Save writes to the installed folder. The examples are copied there when you save.</p>
+  </aside>
+  <section>
+    <div class="row">
+      <div class="field">
+        <label for="f-name">Name</label>
+        <input id="f-name" placeholder="Rags to Riches">
+      </div>
+      <div class="field narrow">
+        <label for="f-deadline">Deadline (days)</label>
+        <input id="f-deadline" type="number" min="1" placeholder="optional">
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="f-description">Description</label>
+        <input id="f-description" placeholder="What the player is trying to do">
+      </div>
+    </div>
+
+    <hr>
+    <h2>Start</h2>
+    <div class="row">
+      <div class="field narrow">
+        <label for="f-start-money">Money (set)</label>
+        <input id="f-start-money" type="number" placeholder="20000">
+      </div>
+      <div class="field">
+        <label for="f-start-traits">Traits to add (comma separated)</label>
+        <input id="f-start-traits" placeholder="trait_Ambitious, trait_Creative">
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="f-start-skills">Skills to set (Name:level, comma separated)</label>
+        <input id="f-start-skills" placeholder="Painting:2, Writing:3">
+      </div>
+      <div class="field">
+        <label for="f-start-remove-traits">Traits to remove</label>
+        <input id="f-start-remove-traits" placeholder="trait_Lazy">
+      </div>
+    </div>
+    <div class="checks" style="margin-bottom:14px;">
+      <label><input id="f-remove-careers" type="checkbox"> Remove all careers</label>
+    </div>
+
+    <hr>
+    <h2>Goals</h2>
+    <p class="hint">The script mod checks all of these. Only skill, money, home value, household size and day goals can also be exported to the game's Scenarios menu.</p>
+    <div id="goals"></div>
+    <button onclick="addGoal()">Add goal</button>
+
+    <hr>
+    <h2>Rules</h2>
+    <p class="hint">Rules are watched by the script mod only; the menu export reports them as unsupported.</p>
+    <div id="rules"></div>
+    <button onclick="addRule()">Add rule</button>
+
+    <hr>
+    <h2>Outcomes</h2>
+    <div class="row">
+      <div class="field">
+        <label for="f-win-notification">Win notification</label>
+        <input id="f-win-notification" placeholder="From nothing to a fortune!">
+      </div>
+      <div class="field narrow">
+        <label for="f-win-money">Win money</label>
+        <input id="f-win-money" type="number">
+      </div>
+      <div class="field">
+        <label for="f-win-trait">Win trait</label>
+        <input id="f-win-trait" placeholder="optional">
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="f-lose-notification">Lose notification</label>
+        <input id="f-lose-notification" placeholder="Time's up.">
+      </div>
+      <div class="field narrow">
+        <label for="f-lose-money">Lose money</label>
+        <input id="f-lose-money" type="number">
+      </div>
+      <div class="field">
+        <label for="f-lose-trait">Lose trait</label>
+        <input id="f-lose-trait" placeholder="optional">
+      </div>
+    </div>
+
+    <hr>
+    <h2>Game menu export</h2>
+    <p class="hint">These fields describe the card in the in-game Scenarios screen. Category and difficulty must be EA enum names (for example from Sims 4 Studio); leave them blank if you only use the script mod.</p>
+    <div class="row">
+      <div class="field">
+        <label for="f-menu-category">Category enum name</label>
+        <input id="f-menu-category" placeholder="e.g. CHALLENGE">
+      </div>
+      <div class="field">
+        <label for="f-menu-difficulty">Difficulty enum name</label>
+        <input id="f-menu-difficulty" placeholder="e.g. HARD">
+      </div>
+      <div class="field narrow">
+        <label for="f-menu-sort">Sort order</label>
+        <input id="f-menu-sort" type="number" placeholder="100">
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="f-menu-template">Premade household resource key</label>
+        <input id="f-menu-template" placeholder="optional, type:group:instance">
+      </div>
+      <div class="field">
+        <label for="f-menu-tagline">Tagline</label>
+        <input id="f-menu-tagline" placeholder="short card text">
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="primary" onclick="save()">Save</button>
+      <button onclick="validate()">Validate</button>
+      <button onclick="exportPackage()">Export .package</button>
+      <button onclick="toggleJson()">JSON</button>
+      <button class="danger" onclick="deleteScenario()">Delete</button>
+    </div>
+
+    <div id="report" class="report"></div>
+
+    <div id="json-box" class="json-box">
+      <label for="json-text">Scenario JSON</label>
+      <textarea id="json-text" spellcheck="false"></textarea>
+      <div class="actions">
+        <button onclick="applyJson()">Apply JSON</button>
+        <button onclick="toggleJson()">Close</button>
+      </div>
+    </div>
+  </section>
+</main>
+<script>
+const META = window.__META__ || {
+  goal_types: ["skill", "household_money", "home_value", "career_level", "relationship",
+               "aspiration", "household_size", "day", "custom"],
+  who: ["active", "any", "all"],
+  relationships: ["friend", "good_friend", "best_friend", "partner", "married"],
+  rule_types: ["no_career", "no_cheats", "max_purchase", "max_money", "no_leaving_lot"],
+  penalty_types: ["warning", "money", "moodlet", "fail"]
+};
+const GOAL_TYPES = META.goal_types;
+const WHO = META.who;
+const RELATIONSHIPS = META.relationships;
+const RULE_TYPES = META.rule_types;
+const PENALTY_TYPES = META.penalty_types;
+let data = blank();
+let loaded = {source: null, name: null};
+
+function $(sel) { return document.querySelector(sel); }
+function blank() {
+  return {
+    name: "", description: "", start: {},
+    goals: [{id: "goal1", type: "skill", skill: "", level: 1, who: "active"}],
+    rules: [], outcomes: {win: {notification: ""}, lose: {notification: ""}},
+    menu: {sort_order: 100}
+  };
+}
+function whoMapToText(value) {
+  if (!value) return "";
+  return (value.active || []).join(", ");
+}
+function whoMapSkills(value) {
+  if (!value) return "";
+  const active = value.active || {};
+  return Object.keys(active).map(k => k + ":" + active[k]).join(", ");
+}
+function textToList(text) {
+  return (text || "").split(",").map(s => s.trim()).filter(Boolean);
+}
+function textToSkills(text) {
+  const out = {};
+  (text || "").split(",").forEach(part => {
+    const bits = part.split(":");
+    const name = (bits[0] || "").trim();
+    const level = parseInt((bits[1] || "").trim(), 10);
+    if (name && !isNaN(level)) out[name] = level;
+  });
+  return out;
+}
+function nonEmpty(obj) {
+  return Object.keys(obj).some(k => obj[k] !== "" && obj[k] !== null && obj[k] !== undefined);
+}
+
+function fill() {
+  const d = data;
+  $("#f-name").value = d.name || "";
+  $("#f-description").value = d.description || "";
+  $("#f-deadline").value = d.deadline_days || "";
+  const s = d.start || {};
+  $("#f-start-money").value = (typeof s.money === "number") ? s.money : "";
+  $("#f-start-traits").value = whoMapToText(s.traits);
+  $("#f-start-remove-traits").value = whoMapToText(s.remove_traits);
+  $("#f-start-skills").value = whoMapSkills(s.skills);
+  $("#f-remove-careers").checked = !!s.remove_careers;
+  const win = (d.outcomes && d.outcomes.win) || {};
+  const lose = (d.outcomes && d.outcomes.lose) || {};
+  $("#f-win-notification").value = win.notification || "";
+  $("#f-win-money").value = win.money || "";
+  $("#f-win-trait").value = win.trait || "";
+  $("#f-lose-notification").value = lose.notification || "";
+  $("#f-lose-money").value = lose.money || "";
+  $("#f-lose-trait").value = lose.trait || "";
+  const m = d.menu || {};
+  $("#f-menu-category").value = m.category || "";
+  $("#f-menu-difficulty").value = m.difficulty || "";
+  $("#f-menu-sort").value = m.sort_order || "";
+  $("#f-menu-template").value = m.template || "";
+  $("#f-menu-tagline").value = m.tagline || "";
+  renderGoals();
+  renderRules();
+}
+
+function field(label, inner, narrow) {
+  return `<div class="field${narrow ? " narrow" : ""}"><label>${label}</label>${inner}</div>`;
+}
+function textInput(value, attrs) {
+  return `<input ${attrs} value="${(value === undefined || value === null) ? "" : String(value).replace(/"/g, "&quot;")}">`;
+}
+function selectInput(options, value, attrs) {
+  return `<select ${attrs}>` + options.map(o =>
+    `<option value="${o}"${o === value ? " selected" : ""}>${o}</option>`).join("") + "</select>";
+}
+
+function goalFields(g, i) {
+  const t = g.type;
+  let html = "";
+  if (t === "skill") {
+    html += field("Skill", textInput(g.skill, `data-g="${i}" data-k="skill" placeholder="Painting"`));
+    html += field("Level", textInput(g.level, `data-g="${i}" data-k="level" type="number" min="1"`), true);
+    html += field("Who", selectInput(WHO, g.who || "active", `data-g="${i}" data-k="who"`), true);
+  } else if (t === "household_money" || t === "home_value") {
+    html += field("Amount", textInput(g.amount, `data-g="${i}" data-k="amount" type="number" min="0"`), true);
+  } else if (t === "career_level") {
+    html += field("Career", textInput(g.career, `data-g="${i}" data-k="career" placeholder="painter"`));
+    html += field("Level", textInput(g.level, `data-g="${i}" data-k="level" type="number" min="1"`), true);
+    html += field("Who", selectInput(WHO, g.who || "active", `data-g="${i}" data-k="who"`), true);
+  } else if (t === "relationship") {
+    html += field("Level", selectInput(RELATIONSHIPS, g.level || "friend", `data-g="${i}" data-k="level"`));
+    html += field("Who", selectInput(WHO, g.who || "any", `data-g="${i}" data-k="who"`), true);
+  } else if (t === "aspiration") {
+    html += field("Aspiration", textInput(g.aspiration, `data-g="${i}" data-k="aspiration"`));
+    html += field("Who", selectInput(WHO, g.who || "active", `data-g="${i}" data-k="who"`), true);
+  } else if (t === "household_size") {
+    html += field("Sims", textInput(g.amount, `data-g="${i}" data-k="amount" type="number" min="1"`), true);
+    html += `<div class="checks" style="align-self:end; padding-bottom:6px;"><label><input type="checkbox" data-g="${i}" data-k="children" ${g.children ? "checked" : ""}> children only</label></div>`;
+  } else if (t === "day") {
+    html += field("Day", textInput(g.day, `data-g="${i}" data-k="day" type="number" min="1"`), true);
+  } else if (t === "custom") {
+    html += field("Description", textInput(g.description, `data-g="${i}" data-k="description"`));
+  }
+  return html;
+}
+
+function renderGoals() {
+  const box = $("#goals");
+  box.innerHTML = (data.goals || []).map((g, i) => {
+    const reward = g.reward || {};
+    return `<div class="card">
+      <div class="card-head">
+        <strong>Goal ${i + 1}</strong>
+        <button class="danger" onclick="removeGoal(${i})">Remove</button>
+      </div>
+      <div class="row">
+        ${field("Id", textInput(g.id, `data-g="${i}" data-k="id"`), true)}
+        ${field("Type", selectInput(GOAL_TYPES, g.type, `data-g="${i}" data-k="type" onchange="structuralChange()"`))}
+        ${field("Requires", textInput((g.requires || []).join(", "), `data-g="${i}" data-k="requires" placeholder="goal id, goal id"`))}
+      </div>
+      <div class="row">${goalFields(g, i)}</div>
+      <div class="row">
+        ${field("Reward money", textInput(reward.money, `data-g="${i}" data-k="reward.money" type="number"`), true)}
+        ${field("Reward trait", textInput(reward.trait, `data-g="${i}" data-k="reward.trait"`), true)}
+        ${field("Reward notification", textInput(reward.notification, `data-g="${i}" data-k="reward.notification"`))}
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function penaltyFields(r, i) {
+  const p = r.penalty || {type: "warning"};
+  let html = field("Penalty", selectInput(PENALTY_TYPES, p.type || "warning", `data-r="${i}" data-k="penalty.type"`), true);
+  if (p.type === "money") html += field("Fine", textInput(p.amount, `data-r="${i}" data-k="penalty.amount" type="number"`), true);
+  if (p.type === "moodlet") html += field("Buff", textInput(p.buff, `data-r="${i}" data-k="penalty.buff"`));
+  return html;
+}
+
+function renderRules() {
+  const box = $("#rules");
+  box.innerHTML = (data.rules || []).map((r, i) => {
+    const needsAmount = r.type === "max_purchase" || r.type === "max_money";
+    return `<div class="card">
+      <div class="card-head">
+        <strong>Rule ${i + 1}</strong>
+        <button class="danger" onclick="removeRule(${i})">Remove</button>
+      </div>
+      <div class="row">
+        ${field("Id", textInput(r.id, `data-r="${i}" data-k="id"`), true)}
+        ${field("Type", selectInput(RULE_TYPES, r.type, `data-r="${i}" data-k="type" onchange="structuralChange()"`))}
+        ${needsAmount ? field("Amount", textInput(r.amount, `data-r="${i}" data-k="amount" type="number" min="1"`), true) : ""}
+        ${penaltyFields(r, i)}
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function numOrUndefined(v) {
+  if (v === undefined || v === null || String(v).trim() === "") return undefined;
+  const n = Number(v);
+  return isNaN(n) ? undefined : n;
+}
+
+function collect() {
+  const d = JSON.parse(JSON.stringify(data));
+  d.name = $("#f-name").value.trim();
+  d.description = $("#f-description").value.trim();
+  const deadline = numOrUndefined($("#f-deadline").value);
+  if (deadline === undefined) delete d.deadline_days; else d.deadline_days = deadline;
+
+  const s = {};
+  const money = numOrUndefined($("#f-start-money").value);
+  if (money !== undefined) s.money = money;
+  const traits = textToList($("#f-start-traits").value);
+  if (traits.length) s.traits = {active: traits};
+  const removeTraits = textToList($("#f-start-remove-traits").value);
+  if (removeTraits.length) s.remove_traits = {active: removeTraits};
+  const skills = textToSkills($("#f-start-skills").value);
+  if (Object.keys(skills).length) s.skills = {active: skills};
+  if ($("#f-remove-careers").checked) s.remove_careers = true;
+  d.start = s;
+
+  d.goals = [];
+  document.querySelectorAll("#goals .card").forEach(card => {
+    const g = {};
+    const get = k => {
+      const el = card.querySelector(`[data-k="${k}"]`);
+      return el ? el.value : undefined;
+    };
+    g.id = (get("id") || "").trim();
+    g.type = get("type");
+    const t = g.type;
+    if (t === "skill") { g.skill = (get("skill") || "").trim(); g.level = numOrUndefined(get("level")); g.who = get("who"); }
+    if (t === "household_money" || t === "home_value") g.amount = numOrUndefined(get("amount"));
+    if (t === "career_level") { g.career = (get("career") || "").trim(); g.level = numOrUndefined(get("level")); g.who = get("who"); }
+    if (t === "relationship") { g.level = get("level"); g.who = get("who"); }
+    if (t === "aspiration") { g.aspiration = (get("aspiration") || "").trim(); g.who = get("who"); }
+    if (t === "household_size") { g.amount = numOrUndefined(get("amount")); const chk = card.querySelector('[data-k="children"]'); if (chk && chk.checked) g.children = true; }
+    if (t === "day") g.day = numOrUndefined(get("day"));
+    if (t === "custom") g.description = (get("description") || "").trim();
+    const requires = textToList(get("requires"));
+    if (requires.length) g.requires = requires;
+    const reward = {};
+    const rm = numOrUndefined(get("reward.money"));
+    if (rm !== undefined) reward.money = rm;
+    const rt = (get("reward.trait") || "").trim();
+    if (rt) reward.trait = rt;
+    const rn = (get("reward.notification") || "").trim();
+    if (rn) reward.notification = rn;
+    if (nonEmpty(reward)) g.reward = reward;
+    d.goals.push(g);
+  });
+
+  d.rules = [];
+  document.querySelectorAll("#rules .card").forEach(card => {
+    const r = {};
+    const get = k => {
+      const el = card.querySelector(`[data-k="${k}"]`);
+      return el ? el.value : undefined;
+    };
+    r.id = (get("id") || "").trim();
+    r.type = get("type");
+    const amount = numOrUndefined(get("amount"));
+    if (amount !== undefined) r.amount = amount;
+    const p = {type: get("penalty.type") || "warning"};
+    const fine = numOrUndefined(get("penalty.amount"));
+    if (fine !== undefined) p.amount = fine;
+    const buff = (get("penalty.buff") || "").trim();
+    if (buff) p.buff = buff;
+    r.penalty = p;
+    d.rules.push(r);
+  });
+
+  const win = {};
+  const wm = numOrUndefined($("#f-win-money").value);
+  if (wm !== undefined) win.money = wm;
+  const wt = $("#f-win-trait").value.trim(); if (wt) win.trait = wt;
+  const wn = $("#f-win-notification").value.trim(); if (wn) win.notification = wn;
+  const lose = {};
+  const lm = numOrUndefined($("#f-lose-money").value); if (lm !== undefined) lose.money = lm;
+  const lt = $("#f-lose-trait").value.trim(); if (lt) lose.trait = lt;
+  const ln = $("#f-lose-notification").value.trim(); if (ln) lose.notification = ln;
+  d.outcomes = {};
+  if (nonEmpty(win)) d.outcomes.win = win;
+  if (nonEmpty(lose)) d.outcomes.lose = lose;
+
+  const menu = {};
+  const mc = $("#f-menu-category").value.trim(); if (mc) menu.category = mc;
+  const md = $("#f-menu-difficulty").value.trim(); if (md) menu.difficulty = md;
+  const ms = numOrUndefined($("#f-menu-sort").value); if (ms !== undefined) menu.sort_order = ms;
+  const mt = $("#f-menu-template").value.trim(); if (mt) menu.template = mt;
+  const mg = $("#f-menu-tagline").value.trim(); if (mg) menu.tagline = mg;
+  if (nonEmpty(menu)) d.menu = menu; else delete d.menu;
+
+  return d;
+}
+
+function sync() { data = collect(); }
+function structuralChange() { sync(); renderGoals(); renderRules(); }
+function addGoal() {
+  sync();
+  const n = data.goals.length + 1;
+  data.goals.push({id: "goal" + n, type: "skill", skill: "", level: 1, who: "active"});
+  renderGoals();
+}
+function removeGoal(i) { sync(); data.goals.splice(i, 1); renderGoals(); }
+function addRule() {
+  sync();
+  data.rules.push({id: "rule" + (data.rules.length + 1), type: "no_career", penalty: {type: "warning"}});
+  renderRules();
+}
+function removeRule(i) { sync(); data.rules.splice(i, 1); renderRules(); }
+
+function newScenario() {
+  data = blank();
+  loaded = {source: null, name: null};
+  fill();
+  showReport({title: "New scenario", notes: ["Choose a name, then Save."]});
+}
+
+async function refreshList() {
+  const state = await (await fetch("/api/state")).json();
+  $("#paths").textContent = "installed: " + state.installed_dir + "  |  examples: " + state.examples_dir;
+  const render = (items, source) => items.length
+    ? items.map(item => `<button class="scenario-link" onclick="loadScenario('${source}', '${item.name}')">${item.name}<small>${item.valid ? "valid" : "needs fixing"}</small></button>`).join("")
+    : `<p class="hint">none</p>`;
+  $("#installed").innerHTML = render(state.installed, "installed");
+  $("#examples").innerHTML = render(state.examples, "examples");
+}
+
+async function loadScenario(source, name) {
+  const query = new URLSearchParams({source, name});
+  const result = await (await fetch("/api/scenario?" + query)).json();
+  if (result.error) { showReport({title: "Could not load", errors: [result.error]}); return; }
+  data = result.data;
+  if (!data.menu) data.menu = {sort_order: 100};
+  loaded = {source, name};
+  fill();
+  showReport({title: "Loaded " + name, notes: ["Source: " + source]});
+}
+
+function scenarioText() {
+  sync();
+  return JSON.stringify(data, null, 2);
+}
+
+async function post(path, body) {
+  const response = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  return await response.json();
+}
+
+async function save() {
+  const result = await post("/api/save", {name: $("#f-name").value.trim(), text: scenarioText()});
+  reportFrom(result, "Saved");
+  if (!result.errors || !result.errors.length) {
+    loaded = {source: "installed", name: $("#f-name").value.trim()};
+    refreshList();
+  }
+}
+
+async function validate() {
+  const result = await post("/api/validate", {text: scenarioText()});
+  reportFrom(result, "Validated");
+}
+
+async function exportPackage() {
+  const result = await post("/api/export", {name: $("#f-name").value.trim(), text: scenarioText()});
+  reportFrom(result, "Exported");
+  if (result.path) {
+    const box = $("#report");
+    box.innerHTML += `<p class="ok">Package: ${result.path}${result.installed_path ? "<br>Installed: " + result.installed_path : ""}</p>`;
+  }
+}
+
+async function deleteScenario() {
+  if (!loaded.name) { showReport({title: "Nothing loaded"}); return; }
+  if (!confirm(`Delete ${loaded.name} from the installed folder?`)) return;
+  const result = await post("/api/delete", {name: loaded.name});
+  reportFrom(result, "Deleted");
+  newScenario();
+  refreshList();
+}
+
+function reportFrom(result, title) {
+  showReport({
+    title: title + (result.errors && result.errors.length ? " with problems" : ""),
+    errors: result.errors, warnings: result.warnings, unsupported: result.unsupported,
+    notes: result.notes
+  });
+}
+
+function showReport(r) {
+  const box = $("#report");
+  box.classList.add("show");
+  let html = `<h3>${r.title || "Report"}</h3>`;
+  if (r.errors && r.errors.length) html += `<div class="error"><strong>Problems</strong><ul>${r.errors.map(e => `<li>${escapeHtml(e)}</li>`).join("")}</ul></div>`;
+  if (r.warnings && r.warnings.length) html += `<div class="warn"><strong>Warnings</strong><ul>${r.warnings.map(e => `<li>${escapeHtml(e)}</li>`).join("")}</ul></div>`;
+  if (r.unsupported && r.unsupported.length) html += `<div class="warn"><strong>Not exported to the menu</strong><ul>${r.unsupported.map(e => `<li>${escapeHtml(e)}</li>`).join("")}</ul></div>`;
+  if (r.notes && r.notes.length) html += `<div class="note"><ul>${r.notes.map(e => `<li>${escapeHtml(e)}</li>`).join("")}</ul></div>`;
+  if (!r.errors || !r.errors.length) {
+    if (r.title && r.title.startsWith("Validated")) html += `<p class="ok">No validation problems.</p>`;
+  }
+  box.innerHTML = html;
+}
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+}
+
+function toggleJson() {
+  const box = $("#json-box");
+  if (!box.classList.contains("show")) {
+    $("#json-text").value = scenarioText();
+    box.classList.add("show");
+  } else {
+    box.classList.remove("show");
+  }
+}
+
+async function applyJson() {
+  let parsed;
+  try { parsed = JSON.parse($("#json-text").value); }
+  catch (e) { showReport({title: "JSON problem", errors: [String(e)]}); return; }
+  const result = await post("/api/validate", {text: JSON.stringify(parsed)});
+  if (result.errors && result.errors.length) { reportFrom(result, "JSON not applied"); return; }
+  data = parsed;
+  if (!data.menu) data.menu = {sort_order: 100};
+  fill();
+  $("#json-box").classList.remove("show");
+  reportFrom(result, "JSON applied");
+}
+
+newScenario();
+refreshList();
+if (location.protocol === "file:") {
+  showReport({title: "Opened from disk", notes: [
+    "The form works, but Save, Validate and Export need the local server.",
+    "Run: py -3.7 tools/scenario_builder.py and use http://127.0.0.1:8765/"
+  ]});
+}
+</script>
+</body>
+</html>

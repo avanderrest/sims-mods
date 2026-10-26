@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Phone > "Apply for Early Graduation".
+     An ImmediateSuperInteraction whose do_command runs the script with the Sim's id;
+     fu_main.py adds it to the phone menu only while the Sim has enough credits for a
+     Certificate or Associate Degree. Modelled on Hard Mode's PayOffDebt.xml.
+     s = fnv64("HouseRules_FlexibleUniversity_EarlyExit") with the high bit set;
+     EARLY_EXIT_AFFORDANCE_ID in fu_main.py must match. -->
+<I c="ImmediateSuperInteraction" i="interaction" m="interactions.base.immediate_interaction" n="HouseRules_FlexibleUniversity_EarlyExit" s="15053560015243968642">
+  <T n="display_name">{{string:Apply for Early Graduation}}</T>
+  <T n="pie_menu_icon">2f7d0004:00000000:25eea5cdba6a6fd6</T>
+  <T n="pie_menu_priority">1</T>
+  <E n="target_type">OBJECT</E>
+  <L n="basic_extras">
+    <V t="do_command">
+      <T n="command">houserules.flexuni.early_exit_phone</T>
+      <L n="arguments">
+        <V t="participant">
+          <E n="argument">Actor</E>
+        </V>
+      </L>
+    </V>
+  </L>
+</I>

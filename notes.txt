@@ -1,0 +1,12 @@
+Ollama or LM Studio running - give me a script to start them. Add something like npm depedencies for them
+
+Optional: a sim with a finished Biology degree gets Doctor even with no skills. - any degree unlocks all careers
+
+
+YOu should be able to pay your debt off from your phone like with university loan
+
+
+testing done around 7pm on 13/10/2026, See logs.
+
+
+scenarios idea hasn't been implemented yet

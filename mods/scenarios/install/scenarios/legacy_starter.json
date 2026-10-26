@@ -1,0 +1,23 @@
+{
+  "name": "Legacy Founder",
+  "description": "One young adult, §1,800 and an empty lot. Reach the top of a career, build a house worth §75,000 and produce an heir - all in 28 days. Bulldoze the lot before you start.",
+  "start": {
+    "money": 1800
+  },
+  "goals": [
+    {"id": "career", "type": "career_level", "level": 10, "who": "active",
+     "description": "Reach level 10 of any career"},
+    {"id": "home", "type": "home_value", "amount": 75000, "requires": ["career"],
+     "description": "Own a house worth §75,000"},
+    {"id": "heir", "type": "household_size", "amount": 1, "children": true, "requires": ["home"],
+     "description": "Have an heir (a child or teen in the household)",
+     "reward": {"notification": "The legacy has its heir."}}
+  ],
+  "deadline_days": 28,
+  "win": "all_goals",
+  "outcomes": {
+    "win": {"notification": "Your founder did it: career, house and heir. The legacy begins.",
+            "money": 5000},
+    "lose": {"notification": "28 days gone. The founder's story ends here."}
+  }
+}

@@ -1,5 +1,5 @@
 """Scenarios: a tiny file logger (from tools/templates/mod_log_template.py). Writes to
-Mods/BlueRabbit477/logs/scenarios.log and never raises.
+Mods/HouseRules/logs/scenarios.log and never raises.
 """
 import datetime
 import os
@@ -9,7 +9,7 @@ MOD_NAME = "scenarios"
 # Matches tools/config.py's MODS_DIR + CREATOR, but this file runs inside the game's
 # own Python (can't import our build-time config), so the path is written out in full.
 LOG_DIR = os.path.join(os.path.expanduser("~"), "Documents", "Electronic Arts",
-                        "The Sims 4", "Mods", "BlueRabbit477", "logs")
+                        "The Sims 4", "Mods", "HouseRules", "logs")
 
 
 def log(message, level="INFO"):

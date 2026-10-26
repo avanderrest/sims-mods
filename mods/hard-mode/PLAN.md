@@ -11,7 +11,7 @@ Each part can be switched on or off (Challenge-Junkie does this through the mail
 ## What players say is too easy → what we change
 
 ### 1. Careers (first priority; closest to the original idea)
-- **Entry requirements: skills *or* a degree** (Amber, 2026-10-09). To join a full-time career, a sim needs the career's minimum skill levels, **unless they have finished a degree**, which waives the skill gate. Originally only a relevant degree counted (table below); **since 2026-10-14 any finished degree unlocks every career** (Amber: "any degree unlocks all careers"; `ANY_DEGREE_UNLOCKS_ALL` in `hardmode_careers.py`, set it to False to go back to the table). So there are two routes in: study, or teach yourself. These are **entry gates only**: they decide who can start a career at level 1, so they're low, about level 2 in the main skill (Amber, 2026-10-09). Moving up is left to the game's own promotion requirements. Current numbers (in `hardmode_careers.py`):
+- **Entry requirements: skills *or* a degree** (Amber, 2026-10-09). To join a full-time career, a sim needs the career's minimum skill levels, **unless they have finished a degree**, which waives the skill gate. Originally only a relevant degree counted (table below); **since 2026-10-14 any finished degree unlocks every career** (Amber: "any degree unlocks all careers"; `ANY_DEGREE_UNLOCKS_ALL` in `hardmode_careers.py`, set it to False to go back to the table). Flexible University's Certificate and Associate Degree count too (2026-10-26, Amber: partial degrees should be acceptable): Hard Mode reads the qualification records from `flexible_university_data.json`, so neither mod has to import the other. So there are two routes in: study, or teach yourself. These are **entry gates only**: they decide who can start a career at level 1, so they're low, about level 2 in the main skill (Amber, 2026-10-09). Moving up is left to the game's own promotion requirements. Current numbers (in `hardmode_careers.py`):
 
   | Career | Skill gate (without a degree) | Degree that waives it |
   |---|---|---|
@@ -34,7 +34,7 @@ Each part can be switched on or off (Challenge-Junkie does this through the mail
   | Criminal | Mischief 2 | none (skills only) |
 
   Only full careers (`CareerCategory.Work`) are gated; teen and part-time jobs, side hustles and volunteering stay open. The table lives in one place in the code so it's easy to rebalance, and careers from packs you don't own are skipped. Degrees come from Discover University; the "Three Year Degrees + Master's" mod works too. Without Discover University, only the skill route exists.
-  - **Built 2026-10-09** (`hardmode_careers.py`, tested): skill groups (all needed; alternatives within a group), degree waivers matched against *finished* degrees (`degree_tracker.previous_majors`; the earlier `accepted_degrees` was degrees a sim was only *accepted onto*). Careers, skills and degrees are matched by tuning name in the game; `bluerabbit477.hard.gates` shows what matched.
+  - **Built 2026-10-09** (`hardmode_careers.py`, tested): skill groups (all needed; alternatives within a group), degree waivers matched against *finished* degrees (`degree_tracker.previous_majors`; the earlier `accepted_degrees` was degrees a sim was only *accepted onto*). Careers, skills and degrees are matched by tuning name in the game; `houserules.hard.gates` shows what matched.
   - **Enforcement hook:** EA's `careers.select` command, which the Find a Job screen sends when the player picks a job. It's re-registered with an identical signature; it evaluates the rule, logs every pick, and when `enforce` is on refuses a failing pick with a notification. Every other `add_career` route (loading saves, NPC story progression, businesses, fixups) bypasses it. `enforce` is off by default until tested in the game.
 - **Getting fired:** a few missed days or a very bad performance gets the sim fired, and other employers take that into account for a while.
 
@@ -87,13 +87,13 @@ Each part can be switched on or off (Challenge-Junkie does this through the mail
     the same diminishing-markup curve to everything above ×1, plus the item-kind reduction
     above. **First confirm in the game:** log every sale with each multiplier separately, to see
     which one carries the stand's price setting.
-  - In-game check: `bluerabbit477.hard.money.status` prints the effective markup for each markup
+  - In-game check: `houserules.hard.money.status` prints the effective markup for each markup
     level, and the log records every shop, stall and stand sale (listed price → what was earned,
     with each multiplier).
 - Smaller starting funds (setting: 20k / 10k / 5k / 0).
 - Bills that scale more realistically with the household's size and the home's value. A rent-like housing cost for households without their own home.
 - Book royalties and other passive income get the same "market fills up" treatment, so they're worth less when lots arrive in a short time.
-- **Debt** instead of "can't pay, so the power goes off": unpaid bills build up debt with interest. **Paying it off early from the phone** like a university loan (Amber, 2026-10-14; built that day): while there's debt the phone shows *Pay Off Debt*, which opens a list of amounts. The phone entry is real tuning (`tuning/PayOffDebt.xml`, a `CommandSuperInteraction` modelled on EA's phone-silence button) compiled into `BlueRabbit477_hard-mode.package` by `tools/tuning.py`; the script adds it to the phone menu only while the household has debt. Cheat fallback: `bluerabbit477.hard.money.pay_debt [amount]`. Too much debt means a credit score that blocks buying a house or setting up a business, and eventually repossession. (Script.)
+- **Debt** instead of "can't pay, so the power goes off": unpaid bills build up debt with interest. **Paying it off early from the phone** like a university loan (Amber, 2026-10-14; built that day): while there's debt the phone shows *Pay Off Debt*, which opens a list of amounts. The phone entry is real tuning (`tuning/PayOffDebt.xml`, an `ImmediateSuperInteraction` whose `do_command` element runs the script) compiled into `HouseRules_hard-mode.package` by `tools/tuning.py`; the script adds it to the phone menu only while the household has debt. Cheat fallback: `houserules.hard.money.pay_debt [amount]`. Too much debt means a credit score that blocks buying a house or setting up a business, and eventually repossession. (Script.)
 
 ### 3. Skills
 - **Aptitude:** traits give each sim a skill ceiling or a speed multiplier. For example, a Bookworm sim levels Writing faster, and a sim without a relevant trait slows down past level 7. Each sim gets 1–2 random "talents" at young adult.
@@ -109,7 +109,7 @@ Each part can be switched on or off (Challenge-Junkie does this through the mail
 
 - **Tuning** (Sims 4 Studio + XML Injector): career join tests, level requirements, salaries, bill multipliers, skill gain modifiers, mood buff strengths, relationship decay. Wherever possible we *add tests* to existing tuning instead of overwriting whole files, for compatibility.
 - **Script:**
-  - Settings storage and a settings menu (start with cheat commands like `bluerabbit477.hard.careers on`, then a mailbox interaction with a menu).
+  - Settings storage and a settings menu (start with cheat commands like `houserules.hard.careers on`, then a mailbox interaction with a menu).
   - Debt, credit score, getting fired, diminishing returns on passive income: these need state and logic that tuning alone can't do.
   - Reading the settings at load time, and switching modules on or off.
 
@@ -205,7 +205,7 @@ stops short of enforcing anything regardless:**
 **Decision: phase 1 ships read-only regardless.** `hardmode_main.py` reads real sim/career/degree
 data via the confirmed APIs above and reports what the rule *would* decide — it never calls
 `add_career`, never touches `is_career_available` or `CareerLootOp`, never blocks anything. The
-next session with a running game should: load a save, try `bluerabbit477.hard.check <career>
+next session with a running game should: load a save, try `houserules.hard.check <career>
 [sim]` against a few real sims and careers to sanity-check the read-only logic, then look at
 hook 3 above first — it's the one worth pursuing — before wiring up real enforcement.
 

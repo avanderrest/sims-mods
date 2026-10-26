@@ -15,11 +15,11 @@ Where the numbers come from:
   celebrity" moodlet (only with Get Famous; once per pair per sim day).
 
 Cheats:
-  bluerabbit477.social.status                - settings
-  bluerabbit477.social.on / .off
-  bluerabbit477.social.strength <0-100>      - 100 = full effect, 0 = none
-  bluerabbit477.social.check <other sim id>  - both scores and the multipliers, for the selected sim
-  bluerabbit477.social.royal on|off [sim]    - mark a sim as royalty (for saves without a title system)
+  houserules.social.status                - settings
+  houserules.social.on / .off
+  houserules.social.strength <0-100>      - 100 = full effect, 0 = none
+  houserules.social.check <other sim id>  - both scores and the multipliers, for the selected sim
+  houserules.social.royal on|off [sim]    - mark a sim as royalty (for saves without a title system)
 """
 import os
 
@@ -33,7 +33,7 @@ from social_logic import (clash_pairs, compatibility, friendship_multiplier, is_
                           status)
 
 _DATA_DIR = os.path.join(os.path.expanduser("~"), "Documents", "Electronic Arts", "The Sims 4", "Mods",
-                         "BlueRabbit477", "data")
+                         "HouseRules", "data")
 _SETTINGS_FILE = os.path.join(_DATA_DIR, "social_standing.json")
 _DEFAULTS = {"enabled": True, "strength": 100, "royal": []}
 _settings = None
@@ -113,11 +113,17 @@ def _status(sim_info):
              "royal": royal}
     value = status(parts["wealth"], parts["fame"], parts["noble"], parts["royal"])
     _status_cache[sim_info.sim_id] = (hour, value, parts)
+    _prune(_status_cache, hour, 1)
     return value, parts
 
 
 # --- Compatibility ---------------------------------------------------------------------
-_compat_cache = {}   # (id_a, id_b) -> (hour, score)
+# The cache key includes each sim's profile (age, personality traits, likes, dislikes), so
+# a trait gained, a preference changed or an age-up invalidates the pair's entry at once.
+# Lovestruck's own score is not in the key; it can drift for up to the cache lifetime.
+COMPAT_CACHE_HOURS = 6
+CACHE_LIMIT = 4096
+_compat_cache = {}   # (id_a, id_b, profile_a, profile_b) -> (hour, score)
 _extra_clashes = None
 
 
@@ -128,11 +134,13 @@ def _game_clashes():
         pairs = set()
         try:
             from traits.trait_type import TraitType
-            traits = [t for t in services.get_instance_manager(sims4.resources.Types.TRAIT).types.values()
-                      if t.trait_type == TraitType.PERSONALITY]
-            for t in traits:
-                for other in t.conflicting_traits or ():
-                    pairs.add((t.__name__, other.__name__))
+            manager = services.get_instance_manager(sims4.resources.Types.TRAIT)
+            if manager is not None:
+                traits = [t for t in manager.types.values()
+                          if getattr(t, 'trait_type', None) == TraitType.PERSONALITY]
+                for t in traits:
+                    for other in getattr(t, 'conflicting_traits', ()) or ():
+                        pairs.add((t.__name__, other.__name__))
         except Exception:
             social_log.log_exception("reading trait conflicts")
         _extra_clashes = clash_pairs(pairs)
@@ -148,6 +156,13 @@ def _likes(sim_info):
     return likes, dislikes
 
 
+def _profile(sim_info):
+    """Everything the compatibility score is built from: cheap to read, hashable."""
+    traits = tuple(sorted(t.__name__ for t in sim_info.trait_tracker.personality_traits))
+    likes, dislikes = _likes(sim_info)
+    return (sim_info.age, traits, frozenset(likes), frozenset(dislikes))
+
+
 def _lovestruck_score(a, b):
     try:
         from sims4.common import Pack, is_available_pack
@@ -158,19 +173,31 @@ def _lovestruck_score(a, b):
         return None
 
 
+def _prune(cache, hour, max_age_hours):
+    """Drop expired entries once the cache gets big, so long saves don't grow forever."""
+    if len(cache) < 512:
+        return
+    for key in [k for k, v in cache.items() if hour - v[0] >= max_age_hours]:
+        cache.pop(key, None)
+    if len(cache) > CACHE_LIMIT:
+        cache.clear()
+
+
 def _compatibility(a, b):
-    key = (min(a.sim_id, b.sim_id), max(a.sim_id, b.sim_id))
+    profile_a, profile_b = _profile(a), _profile(b)
+    if a.sim_id <= b.sim_id:
+        key = (a.sim_id, b.sim_id, profile_a, profile_b)
+    else:
+        key = (b.sim_id, a.sim_id, profile_b, profile_a)
     hour = _now_hours()
     cached = _compat_cache.get(key)
-    if cached is not None and hour - cached[0] < 6:
+    if cached is not None and hour - cached[0] < COMPAT_CACHE_HOURS:
         return cached[1]
-    traits_a = [t.__name__ for t in a.trait_tracker.personality_traits]
-    traits_b = [t.__name__ for t in b.trait_tracker.personality_traits]
-    likes_a, dislikes_a = _likes(a)
-    likes_b, dislikes_b = _likes(b)
-    score = compatibility(traits_a, traits_b, likes_a, dislikes_a, likes_b, dislikes_b,
-                          same_age=a.age == b.age, clashes=_game_clashes(), ea_score=_lovestruck_score(a, b))
+    score = compatibility(profile_a[1], profile_b[1], profile_a[2], profile_a[3], profile_b[2], profile_b[3],
+                          same_age=profile_a[0] == profile_b[0], clashes=_game_clashes(),
+                          ea_score=_lovestruck_score(a, b))
     _compat_cache[key] = (hour, score)
+    _prune(_compat_cache, hour, COMPAT_CACHE_HOURS)
     return score
 
 
@@ -201,13 +228,30 @@ def _apply_strength(multiplier):
 
 # --- The hook --------------------------------------------------------------------------
 from relationships.relationship_service import RelationshipService
+from relationships.relationship_track import RelationshipTrack
 from singletons import DEFAULT
 
-_original_add = RelationshipService.add_relationship_score
+# Remember the real method on our own wrapper, so reloading this module (or another copy of
+# it) reuses the original instead of wrapping our wrapper and recursing forever.
+_ORIGINAL_ATTR = "_social_standing_original"
+_current = RelationshipService.add_relationship_score
+_original_add = getattr(_current, _ORIGINAL_ATTR, _current)
 
 
 def _track_kind(track):
-    name = getattr(track, "__name__", type(track).__name__).lower()
+    """'friendship' / 'romance' for the game's own tracks, else None (nothing is touched)."""
+    if track is DEFAULT:
+        try:
+            from relationships.global_relationship_tuning import RelationshipGlobalTuning
+            track = RelationshipGlobalTuning.REL_INSPECTOR_TRACK
+        except Exception:
+            return None
+    for known, kind in ((getattr(RelationshipTrack, "FRIENDSHIP_TRACK", None), "friendship"),
+                        (getattr(RelationshipTrack, "ROMANCE_TRACK", None), "romance")):
+        if known is not None and track is known:
+            return kind
+    # Packs and other mods can pass their own track classes: go by name as a fallback.
+    name = (getattr(track, "__name__", None) or type(track).__name__).lower()
     if "friendship" in name:
         return "friendship"
     if "romance" in name:
@@ -215,19 +259,22 @@ def _track_kind(track):
     return None
 
 
-def add_relationship_score(self, sim_id_a, sim_id_b, increment, track=DEFAULT, threshold=None, **kwargs):
+def add_relationship_score(self, sim_id_a, sim_id_b, increment, *args, **kwargs):
+    """Pass-through wrapper: EA's signature (and any mod that changes it) is left intact."""
     try:
         if increment and increment > 0 and _get_settings().get("enabled"):
-            from relationships.global_relationship_tuning import RelationshipGlobalTuning
-            kind = _track_kind(RelationshipGlobalTuning.REL_INSPECTOR_TRACK if track is DEFAULT else track)
+            track = args[0] if args else kwargs.get("track", DEFAULT)
+            kind = _track_kind(track)
             if kind is not None:
                 increment = increment * _multiplier_for(sim_id_a, sim_id_b, kind)
     except Exception:
         social_log.log_exception("relationship gain")
-    return _original_add(self, sim_id_a, sim_id_b, increment, track=track, threshold=threshold, **kwargs)
+    return _original_add(self, sim_id_a, sim_id_b, increment, *args, **kwargs)
 
 
+setattr(add_relationship_score, _ORIGINAL_ATTR, _original_add)
 _starstruck_given = {}  # (lower id, higher id) -> sim day
+_starstruck_day = None
 
 
 def _multiplier_for(sim_id_a, sim_id_b, kind):
@@ -239,16 +286,18 @@ def _multiplier_for(sim_id_a, sim_id_b, kind):
     status_b, _ = _status(b)
     gap = status_a - status_b
     family = _is_family(a, b)
+    compat = _compatibility(a, b)
     if kind == "friendship":
-        mult = friendship_multiplier(_compatibility(a, b), gap, family, _friendship_score(a, b))
+        mult = friendship_multiplier(compat, gap, family, _friendship_score(a, b))
     else:
-        mult = romance_multiplier(gap, family)
+        mult = romance_multiplier(compat, gap, family)
     if not family:
         _maybe_starstruck(a, status_a, b, status_b)
     return _apply_strength(mult)
 
 
 def _maybe_starstruck(a, status_a, b, status_b):
+    global _starstruck_day
     if is_starstruck(status_a, status_b):
         low, high = a, b
     elif is_starstruck(status_b, status_a):
@@ -256,6 +305,10 @@ def _maybe_starstruck(a, status_a, b, status_b):
     else:
         return
     day = int(_now_hours() // 24)
+    if day != _starstruck_day:
+        # The guard is only "once per pair per day", so yesterday's entries are dead weight.
+        _starstruck_given.clear()
+        _starstruck_day = day
     key = (low.sim_id, high.sim_id)
     if _starstruck_given.get(key) == day:
         return
@@ -295,7 +348,7 @@ social_log.log("relationship hook installed")
 
 
 # --- Cheats ----------------------------------------------------------------------------
-@sims4.commands.Command("bluerabbit477.social.status", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.social.status", command_type=sims4.commands.CommandType.Live)
 def social_status(_connection=None):
     output = sims4.commands.CheatOutput(_connection)
     s = _get_settings()
@@ -303,33 +356,33 @@ def social_status(_connection=None):
         "on" if s.get("enabled") else "off", s.get("strength"), len(s.get("royal", []))))
 
 
-@sims4.commands.Command("bluerabbit477.social.on", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.social.on", command_type=sims4.commands.CommandType.Live)
 def social_on(_connection=None):
     _get_settings()["enabled"] = True
     _save_settings()
     sims4.commands.CheatOutput(_connection)("Social Standing is on.")
 
 
-@sims4.commands.Command("bluerabbit477.social.off", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.social.off", command_type=sims4.commands.CommandType.Live)
 def social_off(_connection=None):
     _get_settings()["enabled"] = False
     _save_settings()
     sims4.commands.CheatOutput(_connection)("Social Standing is off.")
 
 
-@sims4.commands.Command("bluerabbit477.social.strength", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.social.strength", command_type=sims4.commands.CommandType.Live)
 def social_strength(value: int = 100, _connection=None):
     _get_settings()["strength"] = max(0, min(100, value))
     _save_settings()
     sims4.commands.CheatOutput(_connection)("Social Standing strength: {}%".format(_get_settings()["strength"]))
 
 
-@sims4.commands.Command("bluerabbit477.social.royal", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.social.royal", command_type=sims4.commands.CommandType.Live)
 def social_royal(state: str = "on", opt_sim: OptionalSimInfoParam = None, _connection=None):
     output = sims4.commands.CheatOutput(_connection)
     sim_info = get_optional_target(opt_sim, _connection, target_type=OptionalSimInfoParam)
     if sim_info is None or state not in ("on", "off"):
-        output("Usage: bluerabbit477.social.royal on|off [sim id]")
+        output("Usage: houserules.social.royal on|off [sim id]")
         return
     royal = set(_get_settings().get("royal", []))
     (royal.add if state == "on" else royal.discard)(sim_info.sim_id)
@@ -339,7 +392,7 @@ def social_royal(state: str = "on", opt_sim: OptionalSimInfoParam = None, _conne
     output("{} is {} royal.".format(_name(sim_info), "now" if state == "on" else "no longer"))
 
 
-@sims4.commands.Command("bluerabbit477.social.check", command_type=sims4.commands.CommandType.Live)
+@sims4.commands.Command("houserules.social.check", command_type=sims4.commands.CommandType.Live)
 def social_check(other_sim_id: int = 0, _connection=None):
     output = sims4.commands.CheatOutput(_connection)
     me = services.active_sim_info()
@@ -352,7 +405,7 @@ def social_check(other_sim_id: int = 0, _connection=None):
                 "{} ({})".format(_name(services.sim_info_manager().get(i)), i)
                 for i in ids[:15] if services.sim_info_manager().get(i) is not None))
         except Exception:
-            output("Pass the other sim's id: bluerabbit477.social.check <sim id>")
+            output("Pass the other sim's id: houserules.social.check <sim id>")
         return
     try:
         s_me, p_me = _status(me)
@@ -366,7 +419,7 @@ def social_check(other_sim_id: int = 0, _connection=None):
             "compatibility {:.2f}, family {}, friendship now {:.0f}".format(compat, family, friendship),
             "friendship gain x{:.2f}, romance gain x{:.2f} (strength {}%)".format(
                 _apply_strength(friendship_multiplier(compat, s_me - s_other, family, friendship)),
-                _apply_strength(romance_multiplier(s_me - s_other, family)), _get_settings().get("strength")),
+                _apply_strength(romance_multiplier(compat, s_me - s_other, family)), _get_settings().get("strength")),
         ]
     except Exception:
         social_log.log_exception("social.check")
