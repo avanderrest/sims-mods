@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Phone > "Pay Off Debt" (Amber, 2026-10-14: "like with university loan").
+<!-- Phone > "Pay Off Debt" (design note, 2026-10-14: "like with university loan").
      An ImmediateSuperInteraction (EA's phone menu items are immediate interactions) whose
      do_command element runs the script with the sim's id; hardmode_money_main.py opens the
      amount picker. It's added to the phone menu by script, only while the household has

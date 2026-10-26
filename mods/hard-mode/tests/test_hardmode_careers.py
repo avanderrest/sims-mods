@@ -4,7 +4,7 @@ from hardmode_careers import (GATES, ALL_SKILLS, gate_for_career, degree_waives,
 
 
 def test_gate_matches_real_career_tuning_names():
-    # Career names Amber confirmed from careers.promote.
+    # Career names confirmed from careers.promote.
     assert gate_for_career("astronaut") == "astronaut"
     assert gate_for_career("adult_business") == "business"
     assert gate_for_career("SecretAgent") == "secretagent"
@@ -131,7 +131,7 @@ def test_every_gate_is_well_formed():
 
 
 def test_entry_gates_stay_low():
-    # Gates are for level 1 of a career only (Amber, 2026-10-09).
+    # Gates are for level 1 of a career only (design note, 2026-10-09).
     for key, (reqs, _) in GATES.items():
         for group in reqs:
             for skill, level in group:

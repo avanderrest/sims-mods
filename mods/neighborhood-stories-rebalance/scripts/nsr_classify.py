@@ -1,5 +1,5 @@
 """Pure logic for Neighborhood Stories Rebalance: no game imports, so this half can be
-tested with plain pytest. See mods/neighborhood-stories-rebalance/PLAN.md.
+tested with plain pytest.
 
 Arcs are classified by their tuning name. The first in-game test (2026-10-09) showed EA's
 names spell out what each arc does, e.g. simStoryArc_ChildrenStories_AdoptAHorse_Adult,

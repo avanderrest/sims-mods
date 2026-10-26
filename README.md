@@ -7,22 +7,23 @@ All mods are **script mods**: they add behaviour the game doesn't have, without 
 EA's files, so they keep working with EA's own settings and with most other mods.
 
 > **Work in progress.** These mods are in active development and several features are still
-> being tested in game. Grab the latest release and back up your save before using them in a save you care about.
+> being tested in game. Back up your save before using them in a save you care about.
 
 ## Install
 
-1. Get the mod files — download them from this repo's **Releases** page, or build them from
-   source (see [DEVELOPMENT.md](DEVELOPMENT.md)).
-2. In `Documents\Electronic Arts\The Sims 4\Mods\`, make a folder called `HouseRules`
-   (any name works, but this keeps the mods together).
-3. Copy the mod files you want into that folder:
-   - `HouseRules_<mod>.ts4script` for each mod
-   - every `HouseRules_<mod>.package` (Hard Mode's phone menu entry and Flexible
-     University's Early Graduation entry)
-   - the `scenarios` folder (if you want the example Scenarios)
-4. Start the game and enable mods in **Game Options → Other**:
+1. Install **Python 3.7** (the game's version) and build the mods:
+   ```
+   py -3.7 tools/build.py
+   ```
+   This runs the unit tests, compiles every mod and copies the result into
+   `Documents\Electronic Arts\The Sims 4\Mods\HouseRules\`. Pass a mod name to build only
+   that one, or `--no-install` to build into `build\` and copy the files yourself:
+   `HouseRules_<mod>.ts4script` for each mod, every `HouseRules_<mod>.package` (Hard Mode's
+   phone menu entry and Flexible University's Early Graduation entry) and the `scenarios`
+   folder.
+2. Start the game and enable mods in **Game Options → Other**:
    **Enable Custom Content and Mods** and **Script Mods Allowed**.
-5. Restart the game. Script mods only load at startup.
+3. Restart the game. Script mods only load at startup.
 
 To remove a mod, delete its files from the folder. To remove everything, delete the
 `HouseRules` folder. Saves stay intact; the mods' own state lives in
@@ -47,8 +48,8 @@ check `lastException*.txt` in `Documents\Electronic Arts\The Sims 4\`.
 
 There are also two developer mods, not needed for normal play:
 `HouseRules_hello-world.ts4script` (build pipeline check) and
-`HouseRules_self-test.ts4script` (in-game diagnostics — see
-[DEVELOPMENT.md](DEVELOPMENT.md#in-game-self-test)).
+`HouseRules_self-test.ts4script` (in-game diagnostics: run `houserules.test` in the cheat
+console; results go to `Mods\HouseRules\logs\self-test.log`).
 
 ## Requirements
 
@@ -310,7 +311,7 @@ Settings: `enabled`, `early_exit`, `preserve_credits`, `fractional_credits`,
 and there is no career-level head start (Hard Mode does accept a Certificate or Associate
 Degree for its career skill gates); computers are object tuning, so the phone is the in-game
 menu and the cheat is the fallback. A term already in progress when the mod loads
-keeps its saved end date. See [PLAN.md](mods/flexible-university/PLAN.md) for why.
+keeps its saved end date.
 
 ## Aspiration Progress
 
@@ -497,7 +498,8 @@ they name what was found and what was skipped.
 
 ## License and reuse
 
-These mods are shared for the community to use:
+The full terms are in [LICENSE](LICENSE). In short, these mods are shared for the community
+to use:
 
 - **Download and play for free.** Anyone is welcome to download the mods and use them in
   their own game, and to include them in their mods folder or share links to this page.

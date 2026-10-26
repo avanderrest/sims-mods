@@ -1,6 +1,6 @@
-"""NPC Routines phase 1 (on-lot only) - game layer. See PLAN.md for the design and
-what's confirmed vs. guessed. The scheduling/data logic lives in npc_routine.py and is
-pytest-tested; this file is the thin, defensive glue to the actual game.
+"""NPC Routines phase 1 (on-lot only) - game layer. The design is described in README.md;
+some affordance names are still guesses. The scheduling/data logic lives in npc_routine.py
+and is pytest-tested; this file is the thin, defensive glue to the actual game.
 
 Cheats:
   houserules.npc.on [sim_id]      - turn on routine mode for a sim (default: selected sim)

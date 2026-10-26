@@ -1,7 +1,7 @@
 """Neighborhood Stories Rebalance - game layer.
 
-See PLAN.md for how this maps onto EA's code, and what's still unverified for lack of a
-running game. Everything here is defensive: a wrong guess should log a line and do
+Some of the mapping onto EA's code is still unverified for lack of a running game.
+Everything here is defensive: a wrong guess should log a line and do
 nothing, never break the base game's own on_loading_screen_animation_finished.
 
 Cheats: houserules.nsr.status - prints what the last zone load found/changed.

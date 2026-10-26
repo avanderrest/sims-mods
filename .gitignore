@@ -7,3 +7,12 @@ __pycache__/
 
 # Overnight scheduler runner, lock and log (machine-specific).
 overnight/
+
+# Local tool state, virtualenvs, editor and OS files.
+.reasonix/
+.venv/
+venv/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

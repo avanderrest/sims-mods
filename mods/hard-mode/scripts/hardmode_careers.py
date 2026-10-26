@@ -1,7 +1,7 @@
 """Pure logic for Hard Mode's career gate. No game imports - hardmode_main.py turns real
 sims/careers into the plain names and numbers used here.
 
-Rule (Amber, 2026-10-09): to newly join a gated full-time career a sim needs the career's
+Rule (design note, 2026-10-09): to newly join a gated full-time career a sim needs the career's
 minimum skills, UNLESS they have finished a degree that waives it. Since 2026-10-14 ANY
 finished degree waives every gate (ANY_DEGREE_UNLOCKS_ALL); Flexible University's
 Certificate and Associate Degree count the same way. The per-career degrees in GATES are
@@ -17,7 +17,7 @@ Names are matched against the game's tuning names in hardmode_main.py:
 
 ANY_DEGREE = "*"
 
-# Amber, 2026-10-14: "any degree unlocks all careers". False = only the degrees in GATES.
+# Design note, 2026-10-14: "any degree unlocks all careers". False = only the degrees in GATES.
 ANY_DEGREE_UNLOCKS_ALL = True
 
 # career key -> (requirements, degrees that waive them)
@@ -25,7 +25,7 @@ ANY_DEGREE_UNLOCKS_ALL = True
 # (skill, level) alternatives of which ANY one is enough.
 #
 # Entry gates: they only decide who can START a career at level 1, so they're low - about
-# level 2 in the career's main skill (Amber, 2026-10-09). Moving up is left to the game's
+# level 2 in the career's main skill (design note, 2026-10-09). Moving up is left to the game's
 # own promotion requirements.
 GATES = {
     "doctor": ([[("Logic", 2)]], ("biology",)),
