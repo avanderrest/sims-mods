@@ -22,8 +22,19 @@ py -3 tools\llm.py start || goto :failed
 echo.
 echo ---------------------------------------------------------------
 echo Watching the brain. Each decision shows the prompt, the answer,
-echo and the model's thinking (for a thinking model). Close this
-echo window to stop watching - the model keeps running.
+echo and the model's thinking (for a thinking model).
+echo.
+echo You can also type a message here and press Enter: it goes to the
+echo same local model and the answer is printed below, and follow-up
+echo messages keep the conversation. Typing never changes what a sim
+echo does - use the in-game cheats for that.
+echo Type /restart to start a fresh conversation, /help for commands.
+echo.
+echo The model waits for The Sims 4: it is loaded when the game
+echo starts and unloaded when the game closes, so it is not eating
+echo memory or VRAM while you are not playing.
+echo.
+echo Close this window to stop watching - the model keeps running.
 echo ---------------------------------------------------------------
 echo.
 py -3 tools\llm_tail.py

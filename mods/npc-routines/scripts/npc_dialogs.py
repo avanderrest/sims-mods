@@ -17,6 +17,7 @@ Local LLM (optional; needs Ollama or LM Studio running on this computer):
   houserules.npc.brain_show [sim]        - shows the goal and the description
   houserules.npc.llm <url> <model>       - default http://localhost:11434/api/generate qwen2.5:3b-instruct
   houserules.npc.llm_test [sim]          - ask now; the answer is applied a few seconds later
+  houserules.npc.actions [sim]           - what the brain is offered for this sim right now
   houserules.npc.think [sim]             - show the last prompt and answer (and thinking, if any)
   houserules.npc.reasoning on|off        - ask a thinking model for its working too (needs qwen3 etc.)
 """
@@ -195,13 +196,15 @@ def npc_start(*words, _connection=None):
     started, needs_text = [], []
     for sim_info in sims:
         npc_main._npc_mode_sim_ids.add(sim_info.sim_id)
+        if not (npc_llm.goal_for(sim_info.sim_id) or npc_llm.instructions_for(sim_info.sim_id)):
+            needs_text.append(sim_info.first_name)
+            continue
+        # This is the switch the start-llm watcher waits for: only now does a model get used.
+        npc_llm.mark_active(sim_info.sim_id)
         if not available:
             continue
-        if npc_llm.goal_for(sim_info.sim_id) or npc_llm.instructions_for(sim_info.sim_id):
-            npc_main._ask_now(sim_info, output)
-            started.append(sim_info.first_name)
-        else:
-            needs_text.append(sim_info.first_name)
+        npc_main._ask_now(sim_info, output)
+        started.append(sim_info.first_name)
     npc_main._save_npc_mode()
     if not available:
         output("The local LLM isn't reachable - start start-llm.cmd. NPC mode is on; "
@@ -224,7 +227,7 @@ def npc_stop(*words, _connection=None):
     npc_main._ensure_loaded()
     for sim_info in sims:
         npc_main._npc_mode_sim_ids.discard(sim_info.sim_id)
-        npc_main._next_ask.pop(sim_info.sim_id, None)
+        npc_main._forget(sim_info.sim_id)
     npc_main._save_npc_mode()
     output("Stopped the LLM for {}.".format(", ".join(s.first_name for s in sims)))
 

@@ -410,12 +410,56 @@ needs up":
 - Starter activities: workout, paint, read, chess, jog. Any real interaction name also works
   (`houserules.npc.find <text>` helps you find one).
 - Routines cover sims on the loaded lot. You can also give a sim a free-text personality and
-  let an optional local LLM choose activities from a fixed list (it never invents actions).
+  let an optional local LLM decide what they do from everything that lot actually offers:
+  every interaction on every object (nearest first, the lot's chatterboxes giving way to the
+  rest), plus jogging. The choices are grouped by kind - hygiene, eating, rest, fun, skills,
+  social, outside - so a small model narrows its attention without losing the full list. It
+  never invents actions: it can only pick from that numbered list.
+- The brain also chooses **how long** to do something before it decides again: a quick snack
+  might be 10 minutes, painting 90, sleeping 480. That is a deadline, not a blind wait: while
+  the chosen action is running the mod looks again every few minutes, so a dig that finishes
+  in three minutes gets a new choice then instead of leaving the sim idle for the rest.
+- The prompt tells it what to weigh, in order: a need below 30, then the goal, then a current
+  want, then anything else. Needs that are already fine (80 or above) are handled by removing
+  their options rather than by asking the model to ignore them; pressing needs are named.
+- When a need is pressing, the list holds what serves that need - and the mod does not let it
+  shrink to a single dead end. If the lot's list has nothing for it (or only interactions the
+  game refuses), the mod starts the care itself: shower, wash hands, brush teeth, toilet, a
+  meal, sleep, or a chat with the nearest sim. Anything else that failed a state check stops
+  being offered after the first refusal.
+- Everyday jobs are offered at the end of the list when the lot has the object for them: put
+  food in the fridge, pay the bills, chat on the computer. They never outrank a need, the goal
+  or a want, and each one is pushed through the object's own interaction (so packs' variants
+  are found without a tuning name). `houserules.npc.try pay bills` tries one by hand.
+- When nobody else is on the lot, **chat on the phone** and **invite someone over** join the
+  list. The phone's own menu asks "who?" through a picker (which would open a menu and pause
+  the game), so these use direct paths instead: a call/text interaction from the sim's phone
+  list, and the venue's own summon for an invitation (the same call the game's invite picker
+  ends in, with the highest-relationship sim outside the household). A pressing Social need
+  tries in order: someone here, then the phone, then inviting a friend over.
+- It knows more than their needs: the current emotion (and how intense it is), the buffs
+  behind it ("inspired", "dirty surroundings"), their current wants (whims), what they are
+  doing right now, who else is on the lot (pets by species, household, visitors and service
+  NPCs such as the butler), and the weather/season - alongside traits, skills, job and your
+  goal.
+- If the goal needs something the lot does not have, the prompt says so outright ("Nothing on
+  this lot can be used for painting (e.g. an easel, a sketchpad, an activity table).") and
+  tells it to pick "ask the player for an object that would help", saying what it would use it
+  for ("is there anything here I could paint with?"). You get that as a notification, and the
+  sim immediately picks something else they can do meanwhile. The same wish is repeated at most
+  once an hour. The examples are only suggestions - the mod cannot buy or place objects, so
+  this is where you come in.
+- Pausing the game (including Buy/Build mode) stops new decisions, but an answer already in
+  flight is still applied - the sim queues it and starts it when you unpause.
 - Give a sim a **goal** (`houserules.npc.goal <text>`) and the LLM decides their hours from
   that goal instead of their routine. It does not run on its own: start it with
   `houserules.npc.start` (`houserules.npc.start all` for the whole household), which asks
-  straight away; after that it keeps deciding hourly until `houserules.npc.stop`. If the LLM
-  isn't running you get one notification and the sim uses their routine instead of idling.
+  straight away; after that it keeps choosing whenever the last choice's time is up, until
+  `houserules.npc.stop`. If the LLM isn't running you get one notification, and the sim does a
+  **random one of the things it was just offered** instead of standing there; if nothing was
+  offered it falls back to the routine. (You do not need both a goal and a description: the
+  **goal** is what switches the brain on for that sim, the description/brain text only colours
+  its choices.)
 
 The AI part is optional and works entirely on your computer through
 [Ollama](https://ollama.com) or LM Studio. Without it running, routines still work. Default
@@ -427,26 +471,36 @@ address: `http://localhost:11434/api/generate` with model `qwen2.5:3b-instruct`.
    model (about 2 GB), then starts the server; later runs just start it. If Ollama's tray app
    is already running, the server is up and the script only confirms it. The window then
    **follows the brain's log**, so every prompt, answer and (for a thinking model) its
-   reasoning appears live while you play. Close it to stop watching; the server keeps running.
+   reasoning appears live while you play. You can also **type a question and press Enter**:
+   it is sent to the same local model and the answer is printed in that window (it does not
+   change what any sim does). Follow-ups keep the conversation; type `/restart` for a fresh
+   one, `/help` for the commands. `/goal <text>` sets what the last sim seen in the log works
+   towards (the game picks it up at its next decision, no restart) - or `/goal <sim_id> <text>`
+   to name one, `/goal` to read it back, `/goal clear` to remove it. The
+   model follows the game: it is loaded as soon as The Sims 4 is running and unloaded about a
+   minute after the game closes (transient blips and launcher restarts are ignored), so
+   `houserules.npc.start` never waits on a cold load and nothing stays in memory/VRAM while you
+   are not playing. Close it to stop watching; the server keeps running.
 2. In game, give the selected sim a goal (and optionally a personality), then start the brain:
    ```
    houserules.npc.goal become a famous painter
    houserules.npc.brain loves art and is a bit of a loner
    houserules.npc.start            (or: houserules.npc.start all)
    ```
-3. It asks straight away, then keeps deciding once an hour. `houserules.npc.stop` ends it;
-   the goal and description are saved for next time.
+3. It asks straight away, then keeps asking whenever the chosen action is over (the model
+   picks that too). `houserules.npc.stop` ends it; the goal and description are saved for
+   next time.
 4. `houserules.npc.think` shows the last prompt and full answer (the `start-llm.cmd` window
    shows them live). `qwen2.5:3b-instruct` has no hidden chain-of-thought; to see actual
    reasoning, switch to a thinking model (e.g.
    `houserules.npc.llm http://localhost:11434/api/generate qwen3:4b`) and turn on
    `houserules.npc.reasoning on`.
 
-The model only ever picks from the mod's list of activities, and the brain runs in the
-background so the game doesn't freeze. If the server can't be reached you get one
-notification and the sim falls back to their routine instead of standing idle. The default
-`qwen2.5:3b-instruct` is deliberately small so most of your GPU stays with the game; change
-it with `houserules.npc.llm <url> <model>`.
+The model only ever picks from the numbered list of things that lot actually offers, and it
+picks how long to spend on it; the brain runs in the background so the game doesn't freeze.
+If the server can't be reached you get one notification and the sim falls back to their
+routine instead of standing idle. The default `qwen2.5:3b-instruct` is deliberately small so
+most of your GPU stays with the game; change it with `houserules.npc.llm <url> <model>`.
 
 ```
 houserules.routine.edit [sim]                menu: add an activity / show / clear / NPC mode on-off
@@ -457,6 +511,8 @@ houserules.routine.add <days> <start> <hours> <activity>
 houserules.routine.show [sim]                show the sim's routine
 houserules.routine.clear [sim]               clear the sim's routine
 houserules.npc.tick                          run the hourly check now
+houserules.npc.actions [sim]                 what the LLM is offered here right now
+houserules.npc.checks <text> [sim]           why each matching interaction is or is not offered
 houserules.npc.find <text>                   list real interaction names containing text
 houserules.npc.start [name|all]              start the LLM brain (default: selected sim)
 houserules.npc.stop [name|all]               stop it again

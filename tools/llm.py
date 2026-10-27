@@ -3,8 +3,8 @@
 What to install is declared in llm.json at the repo root, like npm's package.json:
 
   py tools/llm.py install   - install the backend (winget) and download its model; run once
-  py tools/llm.py start     - start the server if it isn't running, load the model, and point
-                              the mod at it (Mods/HouseRules/data/npc_brain.json)
+  py tools/llm.py start     - start the server if it isn't running, point the mod at it, and
+                              load the model now only if The Sims 4 is already running
   py tools/llm.py status    - is it running, and is the model there?
   add --backend lmstudio to any of them to use the other one for that run
 
@@ -25,6 +25,8 @@ from config import MODS_DIR, ROOT, CREATOR
 
 MANIFEST = ROOT / "llm.json"
 BRAIN_FILE = MODS_DIR / CREATOR / "data" / "npc_brain.json"
+# Written by the mod while the brain is deciding for at least one sim (houserules.npc.start).
+BRAIN_STATE_FILE = MODS_DIR / CREATOR / "data" / "npc_brain_state.json"
 SERVER_LOG = ROOT / "build" / "llm-server.log"
 START_TIMEOUT = 60
 
@@ -66,6 +68,43 @@ def find_exe(name):
 def run(*args):
     print("  > " + " ".join(str(a) for a in args))
     return subprocess.call([str(a) for a in args])
+
+
+GAME_PROCESS_NAMES = ("TS4_x64.exe", "TS4.exe")
+
+
+def _tasklist_has_game(output):
+    lowered = (output or "").lower()
+    return any(name.lower() in lowered for name in GAME_PROCESS_NAMES)
+
+
+def game_running():
+    """True when The Sims 4 is running, so the tools can stay out of the way when it isn't."""
+    try:
+        if os.name == "nt":
+            out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], stdout=subprocess.PIPE,
+                                 stderr=subprocess.DEVNULL, universal_newlines=True,
+                                 timeout=15).stdout
+            return _tasklist_has_game(out)
+        return subprocess.call(["pgrep", "-f", "TS4"], stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL) == 0
+    except Exception:
+        return False
+
+
+def backend_for(url):
+    """Which backend a url belongs to - the mod's settings only remember the url/model."""
+    return "lmstudio" if "/v1/" in url else "ollama"
+
+
+def brain_active(path=None):
+    """True when the mod says the brain is deciding for at least one sim (houserules.npc.start).
+    None when the file can't be read right now (the mod may be rewriting it)."""
+    try:
+        data = json.loads((path or BRAIN_STATE_FILE).read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return bool(data.get("sims"))
 
 
 def get_json(url, timeout=3):
@@ -206,28 +245,61 @@ def start(name, conf):
         sys.exit("No model is downloaded ({}). Run: py tools/llm.py install".format(conf["model"]))
     if model != conf["model"]:
         print("{} isn't pulled; using {} instead.".format(conf["model"], model))
-    if name == "ollama":
-        # Load it into memory now, so the first in-game question doesn't wait on it.
-        print("Loading {}...".format(model))
-        _post(server_root(conf["url"]) + "/api/generate", {"model": model, "keep_alive": "60m"})
-    elif not has_model(names, model):
-        print("Loading {}...".format(model))
-        if run(find_exe("lms"), "load", model, "--yes") != 0:
-            sys.exit("Couldn't load {}. Run: py tools/llm.py install --backend lmstudio".format(model))
+    if game_running():
+        # Keep the model resident for the whole session, so the first in-game question (and
+        # every houserules.npc.start) doesn't wait on a cold load.
+        load(name, conf, model)
+    else:
+        print("The Sims 4 isn't running, so {} stays off memory/VRAM. start-llm.cmd's watcher "
+              "loads it when the game starts and unloads it when the game closes.".format(model))
     point_mod_at(conf, model)
     print("Ready: {} with {}. Start the game (or, if it's already running, type the cheat below).".format(
         name, model))
     print("  houserules.npc.llm {} {}".format(conf["url"], model))
 
 
-def _post(url, body, timeout=120):
+def load(name, conf, model, say=print):
+    """Loads the model into memory/VRAM so the first question doesn't wait on it."""
+    if name == "ollama":
+        say("Loading {}...".format(model))
+        _post(server_root(conf["url"]) + "/api/generate",
+              {"model": model, "keep_alive": "60m"}, say=say)
+        return
+    exe = find_exe("lms")
+    if exe is None:
+        return
+    say("Loading {}...".format(model))
+    if run(exe, "load", model, "--yes") != 0:
+        say("Couldn't load {} - the game will load it on first use.".format(model))
+
+
+def unload(name, conf, model, say=print):
+    """Frees the model's memory/VRAM (the game is not running, so nothing needs it)."""
+    if name == "ollama":
+        loaded = get_json(server_root(conf["url"]) + "/api/ps") or {}
+        if not loaded.get("models"):
+            return
+        # A request with keep_alive 0 is Ollama's way of saying "unload after this".
+        _post(server_root(conf["url"]) + "/api/generate",
+              {"model": model, "keep_alive": 0}, say=lambda *_a, **_k: None)
+        say("Model unloaded.")
+        return
+    exe = find_exe("lms")
+    if exe is None:
+        return
+    subprocess.call([exe, "unload", "--all"], stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL)
+    say("Model unloaded.")
+
+
+def _post(url, body, timeout=120, say=print):
     req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),
                                  headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             resp.read()
     except Exception as e:
-        print("  (warming up the model failed: {}; the game will load it on first use)".format(e))
+        say("  (that request failed: {}; the game will load the model on first use)".format(e))
 
 
 def point_mod_at(conf, model):
@@ -251,6 +323,10 @@ def status(name, conf):
     print("installed: {}".format("yes" if installed else "no  -> py tools/llm.py install"))
     print("running:   {}".format("no  -> py tools/llm.py start" if names is None else
                                  "yes, at " + server_root(conf["url"])))
+    print("game:      {}".format("running" if game_running() else "not running"))
+    active = brain_active()
+    print("brain:     {}".format("unknown (state file unreadable)" if active is None else
+                                 "started" if active else "not started"))
     model = choose_model(names, conf["model"])
     if names is not None:
         if model is None:
