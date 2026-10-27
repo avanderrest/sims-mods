@@ -1274,6 +1274,27 @@ def _nsr_classify(_context):
     return "{} arcs plus weights".format(len(cases))
 
 
+@nsr.check("pregnancy gate and daily guard installed")
+def _nsr_pregnancy_gate(_context):
+    import story_progression.story_progression_actions.story_progression_action_family as family
+
+    main = live.require_module("nsr_main")
+    life = live.import_optional("nsr_life")
+    if family.MakePregnantStoryProgressionAction.setup_story_progression_action is not \
+            main._patched_make_pregnant_setup:
+        raise CheckFailed("EA's pregnancy action is not wrapped")
+    if not life.gender_can_be_pregnant("FEMALE") or life.gender_can_be_pregnant("MALE"):
+        raise CheckFailed("the gender gate does not allow only female sims")
+    if life.EA_PREGNANCY_ALLOW_CHANCE >= 1.0:
+        raise CheckFailed("EA's pregnancy gate is not reducing anything")
+    if not hasattr(main, "_last_couple_day"):
+        raise CheckFailed("the once-per-day guard is missing")
+    if life.MAX_DAILY_MOVE_INS > 1 or life.MAX_DAILY_ROMANCES > 2:
+        raise CheckFailed("the daily romance/move-in caps are missing")
+    return "female-only, EA gate {:.0%}, once per day, romance<={} move-in<={}".format(
+        life.EA_PREGNANCY_ALLOW_CHANCE, life.MAX_DAILY_ROMANCES, life.MAX_DAILY_MOVE_INS)
+
+
 # ======================================================================================
 # NPC Routines (and the optional local LLM)
 # ======================================================================================

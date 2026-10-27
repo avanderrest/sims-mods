@@ -27,6 +27,7 @@ from sims.university.university_tuning import University
 from sims4.resources import Types
 from story_progression.story_progression_actions.story_progression_action_family import (
     AddFamilyMemberStoryProgressionAction,
+    MakePregnantStoryProgressionAction,
 )
 from story_progression.story_progression_actions.story_progression_action_moving import (
     MoveOutStoryProgressionAction,
@@ -542,6 +543,7 @@ def _daily_romance_step():
     if manager is None:
         return
     romanced = set()
+    started = 0
     for sim_info_a in list(manager.get_all()):
         household_a = getattr(sim_info_a, "household", None)
         if household_a is None or not _story_progression_enabled(household_a):
@@ -586,6 +588,11 @@ def _daily_romance_step():
                 _last_romances.append(line)
                 del _last_romances[:-50]
                 nsr_log.log("daily romance: " + line)
+                started += 1
+                if started >= nsr_life.MAX_DAILY_ROMANCES:
+                    nsr_log.log("daily romance: daily cap of {} reached".format(
+                        nsr_life.MAX_DAILY_ROMANCES))
+                    return
                 break
 
 
@@ -595,6 +602,7 @@ def _daily_move_in_step():
     if manager is None or household_manager is None:
         return
     handled = set()
+    moved = 0
     for sim_info_a in list(manager.get_all()):
         if sim_info_a.sim_id in handled:
             continue
@@ -641,6 +649,11 @@ def _daily_move_in_step():
             _last_move_ins.append(line)
             del _last_move_ins[:-50]
             nsr_log.log("daily move-in: " + line)
+            moved += 1
+            if moved >= nsr_life.MAX_DAILY_MOVE_INS:
+                nsr_log.log("daily move-in: daily cap of {} reached".format(
+                    nsr_life.MAX_DAILY_MOVE_INS))
+                return
             break
 
 
@@ -673,9 +686,57 @@ def _couple_in_household(household):
     return None
 
 
+def _gender_name(sim_info):
+    gender = getattr(sim_info, "gender", None)
+    return getattr(gender, "name", str(gender) if gender is not None else "")
+
+
 def _pregnancy_capable(sim_info):
+    # EA's pregnancy_tracker.is_pregnancy_supported only checks the species, so male sims
+    # pass it too. This mod only ever makes female sims pregnant.
+    if not nsr_life.gender_can_be_pregnant(_gender_name(sim_info)):
+        return False
     tracker = getattr(sim_info, "pregnancy_tracker", None)
     return bool(tracker is not None and getattr(tracker, "is_pregnancy_supported", False))
+
+
+_original_make_pregnant_setup = \
+    MakePregnantStoryProgressionAction.setup_story_progression_action
+
+
+def _patched_make_pregnant_setup(self, **kwargs):
+    """Gate EA's own Pregnancy arc: female sims only, and only sometimes.
+
+    EA's pregnancy arc can be attached to any adult in a household, and its
+    pregnancy_tracker reports every human as pregnancy-capable regardless of gender. That
+    is how male sims ended up pregnant. It also ran at full strength alongside this mod's
+    daily child step, so almost every adult couple conceived. Blocking here stops both.
+    """
+    try:
+        sim_info = getattr(getattr(self, "_owner_arc", None), "sim_info", None)
+        if sim_info is not None:
+            name = getattr(sim_info, "full_name", "sim")
+            gender_name = _gender_name(sim_info)
+            if not nsr_life.gender_can_be_pregnant(gender_name):
+                nsr_log.log("pregnancy blocked for {}: {} sims do not get pregnant".format(
+                    name, gender_name.lower() or "male"))
+                return StoryProgressionResult(
+                    StoryProgressionResultType.FAILED_TESTS,
+                    "Only female sims can become pregnant.")
+            roll = random.random()
+            if not nsr_life.should_allow_ea_pregnancy(roll, gender_name):
+                nsr_log.log("pregnancy blocked for {}: rare-pregnancy gate (roll {:.3f})".format(
+                    name, roll))
+                return StoryProgressionResult(
+                    StoryProgressionResultType.FAILED_TESTS,
+                    "Pregnancy is rare in this neighbourhood.")
+    except Exception:
+        nsr_log.log_exception("pregnancy gate")
+    return _original_make_pregnant_setup(self, **kwargs)
+
+
+MakePregnantStoryProgressionAction.setup_story_progression_action = \
+    _patched_make_pregnant_setup
 
 
 def _allowed_child_arc(household, adopter, arc_names):
@@ -706,6 +767,11 @@ def _daily_couple_child_step():
                 continue
         except Exception:
             continue
+        try:
+            if any(_is_pregnant(member) for member in household):
+                continue
+        except Exception:
+            pass
         couple = _couple_in_household(household)
         if couple is None:
             continue
@@ -758,10 +824,34 @@ def _daily_couple_child_step():
         nsr_log.log("daily child: " + line)
 
 
+def _sim_day():
+    # absolute_days(), not day(): day() is the weekday (0-6), which repeats every week.
+    try:
+        return int(services.time_service().sim_now.absolute_days())
+    except Exception:
+        return None
+
+
+_last_couple_day = None
+
+
 def _daily_couple_logic():
+    """Run the couple steps once per sim day, not on every story-arc seed.
+
+    EA calls seed_new_story_arcs_gen far more often than once a day. Running a 2% pregnancy
+    roll on every call is what made entire neighbourhoods pregnant, so the day is checked
+    here (the steps are meant to be daily, as their names say). If the clock is unreadable,
+    fall back to the old behaviour rather than skipping the step permanently.
+    """
+    global _last_couple_day
+    day = _sim_day()
+    if day is not None and day == _last_couple_day:
+        return
     _daily_romance_step()
     _daily_move_in_step()
     _daily_couple_child_step()
+    if day is not None:
+        _last_couple_day = day
 
 
 _original_seed_new_story_arcs = StoryProgressionService.seed_new_story_arcs_gen

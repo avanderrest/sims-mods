@@ -68,13 +68,28 @@ MOVE_IN_TOGETHER_CHANCE = {
 # Same-sex couples cannot conceive through EA's pregnancy action, so they adopt. Opposite-
 # sex couples mostly conceive, with a small adoption chance as the real-life fuzzy edge.
 SAME_SEX_ADOPTION_CHANCE = 0.02
-OPPOSITE_SEX_PREGNANCY_CHANCE = 0.02
+# Pregnancy is much rarer than it used to be: the old 2% chance was applied every time EA
+# seeded story arcs (not once per day), which made whole neighbourhoods pregnant. The
+# daily step is now guarded to once per sim day, and this is the chance for that one roll.
+OPPOSITE_SEX_PREGNANCY_CHANCE = 0.005
 OPPOSITE_SEX_ADOPTION_CHANCE = 0.005
 CHILD_CHANCE = {
     "same_sex_adoption": SAME_SEX_ADOPTION_CHANCE,
     "opposite_sex_pregnancy": OPPOSITE_SEX_PREGNANCY_CHANCE,
     "opposite_sex_adoption": OPPOSITE_SEX_ADOPTION_CHANCE,
 }
+
+# EA's own Pregnancy story arc still runs on top of the daily step. Gate it as well: only
+# this share of EA's pregnancy actions is allowed to start. Male sims are never allowed to
+# be the pregnant sim, whatever the game's own filter says.
+EA_PREGNANCY_ALLOW_CHANCE = 0.2
+
+# The daily steps run over every household, so without a cap one lucky run can add several
+# romances or move-ins in the same minute (the 2026-10-27 log had 4 romances and 2 move-ins
+# at 09:00:36). These caps keep a day's changes readable and stop whole neighbourhoods
+# reshuffling at once.
+MAX_DAILY_ROMANCES = 2
+MAX_DAILY_MOVE_INS = 1
 
 # Fallback compatibility for saves without Lovestruck. EA's own compatibility level is
 # used when it exists; these pairs are only the coarse fallback.
@@ -349,6 +364,16 @@ def should_start_child(kind, roll, chance=None):
     if chance is None:
         chance = child_chance(kind)
     return roll < chance
+
+
+def gender_can_be_pregnant(gender_name):
+    """Only female sims get pregnant in this mod, even if the game allows male pregnancy."""
+    return str(gender_name or "").strip().upper() in ("FEMALE", "GENDER.FEMALE")
+
+
+def should_allow_ea_pregnancy(roll, gender_name, chance=EA_PREGNANCY_ALLOW_CHANCE):
+    """Gate EA's own Pregnancy arc: female sim only, and only `chance` of the time."""
+    return gender_can_be_pregnant(gender_name) and roll < chance
 
 
 def should_enroll_in_university(net_worth, roll, chance=None):

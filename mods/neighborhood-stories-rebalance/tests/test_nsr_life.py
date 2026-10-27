@@ -6,6 +6,8 @@ from nsr_life import (
     HORSE_MIN_LOT_AREA,
     MOVE_OUT_CHANCE,
     MOVE_IN_TOGETHER_CHANCE,
+    MAX_DAILY_MOVE_INS,
+    MAX_DAILY_ROMANCES,
     PART_TIME_SHARE,
     CHILD_CHANCE,
     ROMANCE_AGE_MULTIPLIER,
@@ -13,16 +15,19 @@ from nsr_life import (
     SAME_SEX_ADOPTION_CHANCE,
     OPPOSITE_SEX_ADOPTION_CHANCE,
     OPPOSITE_SEX_PREGNANCY_CHANCE,
+    EA_PREGNANCY_ALLOW_CHANCE,
     UNIVERSITY_CHANCE_BY_NET_WORTH,
     career_affinity,
     career_chance,
     child_chance,
     choose_career,
+    gender_can_be_pregnant,
     horse_household_ok,
     move_in_chance,
     move_out_chance,
     part_time_share,
     romance_bit_chance,
+    should_allow_ea_pregnancy,
     should_allow_horse_adoption,
     should_assign_career,
     should_adopt_same_sex,
@@ -242,16 +247,39 @@ def test_same_sex_adoption_chance():
 def test_child_chances_for_same_and_opposite_sex_couples():
     assert CHILD_CHANCE == {
         "same_sex_adoption": 0.02,
-        "opposite_sex_pregnancy": 0.02,
+        "opposite_sex_pregnancy": 0.005,
         "opposite_sex_adoption": 0.005,
     }
-    assert OPPOSITE_SEX_PREGNANCY_CHANCE == 0.02
+    assert OPPOSITE_SEX_PREGNANCY_CHANCE == 0.005
     assert OPPOSITE_SEX_ADOPTION_CHANCE == 0.005
     assert child_chance("same_sex_adoption") == 0.02
-    assert child_chance("opposite_sex_pregnancy") == 0.02
+    assert child_chance("opposite_sex_pregnancy") == 0.005
     assert child_chance("opposite_sex_adoption") == 0.005
     assert child_chance("other") == 0.0
     assert should_start_child("same_sex_adoption", 0.019)
     assert not should_start_child("same_sex_adoption", 0.02)
     assert should_start_child("opposite_sex_adoption", 0.004)
     assert not should_start_child("opposite_sex_adoption", 0.005)
+
+
+def test_only_female_sims_can_be_pregnant():
+    assert gender_can_be_pregnant("FEMALE")
+    assert gender_can_be_pregnant("Gender.FEMALE")
+    assert not gender_can_be_pregnant("MALE")
+    assert not gender_can_be_pregnant("Gender.MALE")
+    assert not gender_can_be_pregnant(None)
+
+
+def test_ea_pregnancy_gate_is_female_only_and_rare():
+    assert EA_PREGNANCY_ALLOW_CHANCE == 0.2
+    assert should_allow_ea_pregnancy(0.19, "FEMALE")
+    assert not should_allow_ea_pregnancy(0.2, "FEMALE")
+    assert not should_allow_ea_pregnancy(0.0, "MALE")
+    assert not should_allow_ea_pregnancy(0.0, None)
+
+
+def test_daily_romance_and_move_in_caps_are_small():
+    # One lucky pass over every household used to add four romances and two move-ins at
+    # once; these caps keep a single day's changes readable.
+    assert MAX_DAILY_ROMANCES == 2
+    assert MAX_DAILY_MOVE_INS == 1
