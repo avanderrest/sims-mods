@@ -1,7 +1,8 @@
 import pytest
-from sg_logic import (admission_check, category_meaning, category_name, club_admission,
-                      group_affordances, in_wealth_range, is_friend, wealth_bounds,
-                      wealth_description)
+from sg_logic import (CLUB_MEMBERS_REMOVED, admission_check, category_meaning, category_name,
+                      club_admission, group_affordances, in_wealth_range, is_friend,
+                      relative_wealth_label, relative_wealth_label_with_ranges, string_key,
+                      wealth_bounds, wealth_description)
 
 
 def test_is_friend():
@@ -44,6 +45,60 @@ def test_in_wealth_range_without_leader_is_permissive():
 def test_wealth_band_can_be_zero():
     assert wealth_bounds(1, 10000, 0) == (10000, 10000)
     assert not in_wealth_range(1, 9999, 10000, 0)
+
+
+def test_relative_wealth_labels_follow_the_categories():
+    assert relative_wealth_label(0) == "Poorer than the club leader"
+    assert relative_wealth_label(1) == "Similar to the club leader"
+    assert relative_wealth_label(2) == "Richer than the club leader"
+    assert relative_wealth_label("Average") == "Similar to the club leader"
+    assert relative_wealth_label("rich") == "Richer than the club leader"
+    assert relative_wealth_label(99) is None
+
+
+def test_relative_wealth_labels_can_include_the_leader_ranges():
+    poor = relative_wealth_label_with_ranges(0, 20000, 0.5)
+    assert poor == ("Poorer than the club leader (under \u00a7{0.Number})", (10000,))
+    average = relative_wealth_label_with_ranges(1, 20000, 0.5)
+    assert average == ("Similar to the club leader (\u00a7{0.Number}-\u00a7{1.Number})",
+                       (10000, 30000))
+    rich = relative_wealth_label_with_ranges(2, 20000, 0.5)
+    assert rich == ("Richer than the club leader (\u00a7{0.Number} or more)", (30001,))
+    assert relative_wealth_label_with_ranges(1, 0) is None
+    assert relative_wealth_label_with_ranges(1, None) is None
+    assert relative_wealth_label_with_ranges(99, 20000) is None
+
+
+def test_every_label_is_shipped_in_the_string_table_source():
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / "text" / "club_wealth_labels.txt"
+    shipped = {line.strip() for line in source.read_text(encoding="utf-8").splitlines()
+               if line.strip() and not line.startswith("#")}
+    for category in (0, 1, 2):
+        assert relative_wealth_label(category) in shipped
+        ranged = relative_wealth_label_with_ranges(category, 20000, 0.5)
+        assert ranged[0] in shipped
+
+
+def test_club_members_removed_notice_is_shipped_in_the_string_table_source():
+    from pathlib import Path
+
+    text_dir = Path(__file__).resolve().parents[1] / "text"
+    shipped = {line.strip() for source in text_dir.glob("*.txt")
+               for line in source.read_text(encoding="utf-8").splitlines()
+               if line.strip() and not line.startswith("#")}
+    assert CLUB_MEMBERS_REMOVED in shipped
+
+
+def test_string_key_matches_the_build_tool_hash():
+    # tools/tuning.py hashes the same text this way when it writes the string table.
+    assert string_key("Poorer than the club leader") == 0xCC353BC7
+    assert string_key("Similar to the club leader") == 0xFF5BD321
+    assert string_key("Richer than the club leader") == 0x3BFBEF79
+    assert string_key("Poorer than the club leader (under \u00a7{0.Number})") == \
+        string_key("poorer than the club leader (under \u00a7{0.number})")
+    assert string_key("Same Text") == string_key("same text")
 
 
 def test_wealth_description():

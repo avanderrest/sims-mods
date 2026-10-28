@@ -1,9 +1,11 @@
 """Compiles a mod's tuning XML into a .package, so pie-menu and phone entries can be made
 without Sims 4 Studio. Used by build.py:
 
-  mods/<name>/tuning/*.xml  -> build/<creator>_<name>.package
+  mods/<name>/tuning/*.xml  -> tuning instances in build/<creator>_<name>.package
+  mods/<name>/text/*.txt    -> string-table entries in the same package (one string per
+                               line; use these for labels a script shows itself)
 
-Each file is one tuning instance in the game's own format (<I c=... i="interaction" n=... s=...>).
+Each XML file is one tuning instance in the game's own format (<I c=... i="interaction" n=... s=...>).
 Text shown in the game is written inline as {{string:Pay Off Debt}}: the build turns each one
 into a string-table key (a hash of the text) and adds the text to a string table, copied
 into every game language so it shows whatever language the game is set to.
@@ -61,6 +63,21 @@ def stbl(strings):
     return b"STBL" + struct.pack("<HBQHI", 5, 0, len(strings), 0, total) + bytes(entries)
 
 
+def read_texts(mod_dir):
+    """Plain strings from mods/<name>/text/*.txt: one per line, blank and # lines skipped.
+
+    These become string-table entries without a tuning instance, for text that a script
+    shows through a localized string (rather than an XML tunable).
+    """
+    texts = []
+    for f in sorted((Path(mod_dir) / "text").glob("*.txt")):
+        for line in f.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                texts.append(line)
+    return texts
+
+
 def compile_xml(text, strings):
     """Replaces {{string:...}} with string keys (collecting them in `strings`).
     Returns (resource type, instance id, bytes)."""
@@ -77,9 +94,11 @@ def compile_xml(text, strings):
 
 def build_package(mod_dir, out_file, package_name):
     files = sorted((Path(mod_dir) / "tuning").glob("*.xml"))
-    if not files:
+    texts = read_texts(mod_dir)
+    if not files and not texts:
         return False
-    strings, resources = {}, []
+    strings = {string_key(text): text for text in texts}
+    resources = []
     for f in files:
         try:
             type_, instance, data = compile_xml(f.read_text(encoding="utf-8"), strings)

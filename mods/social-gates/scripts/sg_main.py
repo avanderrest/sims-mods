@@ -26,6 +26,7 @@ Cheats:
   houserules.gates.invite <sim id>       - friendship score between the selected Sim and another
 """
 import contextlib
+import weakref
 
 import services
 import sims4.commands
@@ -34,12 +35,18 @@ from server_commands.argument_helpers import OptionalSimInfoParam, get_optional_
 
 import sg_log
 import sg_state
-from sg_logic import (club_admission, group_affordances, is_friend, wealth_description)
+from sg_logic import (CLUB_MEMBERS_REMOVED, club_admission, group_affordances, in_wealth_range,
+                      is_friend, relative_wealth_label, relative_wealth_label_with_ranges,
+                      string_key, wealth_description)
 from sg_settings import DEFAULT_SETTINGS
 
 # True while the game is loading saved clubs or re-validating members on its own. Used to
 # grandfather existing members, so a household's new money can never remove them.
 _sg_auto = False
+
+# True while the club rule screen is being built for a small business. Businesses still use
+# the game's fixed household-value brackets, so they keep the game's labels.
+_sg_business_ui = False
 
 
 @contextlib.contextmanager
@@ -71,6 +78,77 @@ def _net_worth(sim_info):
         except Exception:
             sg_log.log_exception("net worth for " + sg_state.sim_name(sim_info))
             return 0
+
+
+# --- Finding the club the player is working on -----------------------------------------
+def _editing_club():
+    """The club led by the active household, if there is one.
+
+    The club UI does not pass the club id to the commands that validate candidates, so this
+    is how the relative wealth rule knows which leader's net worth to use. Household members
+    share a net worth, so it does not matter which of them leads the club.
+    """
+    try:
+        service = services.get_club_service()
+        household = services.active_household()
+        if service is None or household is None:
+            return None
+        member_ids = {sim_info.sim_id for sim_info in household}
+        led = []
+        for club in service.clubs:
+            leader = getattr(club, "leader", None)
+            if leader is not None and leader.sim_id in member_ids:
+                led.append(club)
+        # Prefer a player club: it is the one whose admission rules the mod changes.
+        for club in led:
+            if getattr(club, "club_seed", None) is None:
+                return club
+        return led[0] if led else None
+    except Exception:
+        sg_log.log_exception("finding the club being edited")
+    return None
+
+
+def _criteria_club(criteria):
+    """The club a criteria object belongs to, falling back to the club being edited."""
+    if getattr(criteria, "_sg_business", False):
+        return None
+    club = getattr(criteria, "_club", None)
+    if isinstance(club, weakref.ReferenceType):
+        club = club()
+    if club is not None:
+        return club
+    return _editing_club()
+
+
+def _relative_wealth_applies(club):
+    """True when this club's household-value checks are relative to its leader."""
+    if club is None or _sg_business_ui or not _setting("club_relative_wealth"):
+        return False
+    return getattr(club, "club_seed", None) is None or bool(_setting("club_enforce_premade"))
+
+
+def _relative_labels_for(club):
+    """Labels follow the same policy as the check. No club means a club being created."""
+    if _sg_business_ui or not _setting("club_relative_wealth"):
+        return False
+    return club is None or _relative_wealth_applies(club)
+
+
+def _leader_net_worth(club):
+    leader = getattr(club, "leader", None) if club is not None else services.active_sim_info()
+    return _net_worth(leader)
+
+
+def _club_label(club):
+    """The club's player-facing name. str(club) is its internal "name_id" form."""
+    try:
+        name = club.name
+        if name is not None:
+            return name
+    except Exception:
+        sg_log.log_exception("club name")
+    return str(club)
 
 
 def _friendship_score(a, b):
@@ -501,6 +579,38 @@ def _install_club_gates():
 
     Club._validate_member_against_criteria = _validate_member_against_criteria
 
+    # Remember which club a saved criterion belongs to, so the UI's own candidate checks
+    # (which use criteria.test_sim_info) can use the same leader-relative range as the gate.
+    original_add_criteria = Club.add_membership_criteria
+
+    def add_membership_criteria(self, criteria):
+        try:
+            if isinstance(criteria, ClubRuleCriteriaHouseholdValue):
+                criteria._club = weakref.ref(self)
+        except Exception:
+            sg_log.log_exception("attaching club to wealth criteria")
+        return original_add_criteria(self, criteria)
+
+    Club.add_membership_criteria = add_membership_criteria
+
+    original_test_sim_info = ClubRuleCriteriaHouseholdValue.test_sim_info
+
+    def test_sim_info(self, sim_info):
+        try:
+            club = _criteria_club(self)
+            if not getattr(self, "_sg_business", False) and _relative_wealth_applies(club):
+                if sim_info is not None and sim_info is getattr(club, "leader", None):
+                    return True
+                return in_wealth_range(
+                    self.household_value, _net_worth(sim_info),
+                    _net_worth(getattr(club, "leader", None)),
+                    float(_setting("club_wealth_band")))
+        except Exception:
+            sg_log.log_exception("club wealth test")
+        return original_test_sim_info(self, sim_info)
+
+    ClubRuleCriteriaHouseholdValue.test_sim_info = test_sim_info
+
     original_loaded = Club.on_all_households_and_sim_infos_loaded
 
     def on_all_households_and_sim_infos_loaded(self, client):
@@ -530,9 +640,10 @@ def _install_club_gates():
                         sg_log.log("club edit: {} removed {}".format(str(club), removed))
                         sg_state.notify(
                             "Club members removed",
-                            "{} no longer match the club: {}".format(
-                                str(club), "; ".join("{} ({})".format(name, reason)
-                                                     for name, reason in removed[:3])),
+                            _localized_string(
+                                CLUB_MEMBERS_REMOVED, _club_label(club),
+                                "; ".join("{} ({})".format(name, reason)
+                                          for name, reason in removed[:3])),
                             services.active_sim_info())
         except Exception:
             sg_log.log_exception("club edit re-check")
@@ -663,6 +774,111 @@ def gates_invite(other_sim_id: int = 0, _connection=None):
         "friends" if _is_friend(actor, other) else "not friends"))
 
 
+# --- Club labels: say "relative to the leader" in the rule screen -----------------------
+def _localized_string(text, *tokens):
+    """A LocalizedString the game localizes from the string table built from text/*.txt."""
+    from protocolbuffers.Localization_pb2 import LocalizedString
+    localized = LocalizedString()
+    localized.hash = string_key(text)
+    if tokens:
+        from sims4.localization import create_tokens
+        create_tokens(localized.tokens, *tokens)
+    return localized
+
+
+def _relative_wealth_name(category, club, with_ranges):
+    """The label for a household-value option, including its current § range if possible."""
+    if not _relative_labels_for(club):
+        return None
+    if with_ranges:
+        ranged = relative_wealth_label_with_ranges(
+            category, _leader_net_worth(club), float(_setting("club_wealth_band")))
+        if ranged is not None:
+            template, tokens = ranged
+            return _localized_string(template, *tokens)
+    label = relative_wealth_label(category)
+    return _localized_string(label) if label else None
+
+
+def _install_club_labels():
+    """Relabel the club rule screen's household-value options.
+
+    The game's names ("Poor: Less than 10,000") state fixed ranges, but under
+    club_relative_wealth the club check compares against the club leader. The choices show
+    the leader's current § range; a saved criterion keeps the short label so it cannot go
+    stale when the leader's household value changes. The options keep their enum values and
+    icons, and small-business rules keep the game's wording and brackets.
+    """
+    from clubs.club_service import ClubService
+    from clubs.club_tuning import ClubRuleCriteriaHouseholdValue
+
+    original_populate = ClubRuleCriteriaHouseholdValue._populate_criteria_info
+
+    def populate_criteria_info(cls, criteria_info, household_value):
+        result = original_populate(criteria_info, household_value)
+        try:
+            name = _relative_wealth_name(household_value, _editing_club(), with_ranges=True)
+            if name is not None:
+                criteria_info.name = name
+        except Exception:
+            sg_log.log_exception("club wealth label")
+        return result
+
+    ClubRuleCriteriaHouseholdValue._populate_criteria_info = classmethod(populate_criteria_info)
+
+    original_save = ClubRuleCriteriaHouseholdValue.save
+
+    def save(self, club_criteria):
+        result = original_save(self, club_criteria)
+        try:
+            infos = getattr(club_criteria, "criteria_infos", None)
+            if infos:
+                name = None
+                if not getattr(self, "_sg_business", False):
+                    name = _relative_wealth_name(self.household_value, _criteria_club(self),
+                                                 with_ranges=False)
+                if name is not None:
+                    infos[0].name = name
+                else:
+                    original_populate(infos[0], self.household_value)
+        except Exception:
+            sg_log.log_exception("club wealth saved label")
+        return result
+
+    ClubRuleCriteriaHouseholdValue.save = save
+
+    original_send = ClubService.send_club_building_info
+
+    def send_club_building_info(is_business=False):
+        global _sg_business_ui
+        # Kept until the next screen opens: the validation commands that follow use it too.
+        _sg_business_ui = bool(is_business)
+        return original_send(is_business)
+
+    ClubService.send_club_building_info = staticmethod(send_club_building_info)
+    sg_log.log("club labels: household value reads as poorer/similar/richer than the leader")
+
+
+def _install_business_criteria_marker():
+    """Mark small-business criteria, so club labels and relative wealth never touch them."""
+    try:
+        from small_business.small_business_manager import SmallBusinessManager
+    except Exception:
+        return  # pack not installed
+    original = SmallBusinessManager._load_specific_criteria
+
+    def load_specific_criteria(self, criteria_data):
+        criteria = original(self, criteria_data)
+        try:
+            if criteria is not None:
+                criteria._sg_business = True
+        except Exception:
+            pass
+        return criteria
+
+    SmallBusinessManager._load_specific_criteria = load_specific_criteria
+
+
 def _install():
     try:
         _install_door_gate()
@@ -676,6 +892,14 @@ def _install():
         _install_club_gates()
     except Exception:
         sg_log.log_exception("installing club gates")
+    try:
+        _install_club_labels()
+    except Exception:
+        sg_log.log_exception("installing club labels")
+    try:
+        _install_business_criteria_marker()
+    except Exception:
+        sg_log.log_exception("installing business criteria marker")
     sg_log.log("loaded")
 
 

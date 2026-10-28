@@ -74,11 +74,18 @@ def notify(title, text, sim_info=None):
         import services
         from sims4.localization import LocalizationHelperTuning
         from ui.ui_dialog_notification import UiDialogNotification
+
+        def _as_localized(value):
+            # A caller can pass a localized string (with tokens) or plain text.
+            if isinstance(value, str):
+                return LocalizationHelperTuning.get_raw_text(value)
+            return value
+
         owner = sim_info if sim_info is not None else services.active_sim_info()
         dialog = UiDialogNotification.TunableFactory().default(
             owner,
-            title=lambda *_, **__: LocalizationHelperTuning.get_raw_text(title),
-            text=lambda *_, **__: LocalizationHelperTuning.get_raw_text(text))
+            title=lambda *_, **__: _as_localized(title),
+            text=lambda *_, **__: _as_localized(text))
         dialog.show_dialog()
     except Exception:
         sg_log.log_exception("showing notification")

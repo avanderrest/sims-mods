@@ -1,0 +1,9 @@
+# Labels the club rule screen shows for household-value criteria when Social Gates reads
+# them relative to the club leader. The text is also used by sg_logic.relative_wealth_label
+# and hashed with the same FNV-1a key by tools/tuning.py.
+Poorer than the club leader
+Similar to the club leader
+Richer than the club leader
+Poorer than the club leader (under §{0.Number})
+Similar to the club leader (§{0.Number}-§{1.Number})
+Richer than the club leader (§{0.Number} or more)

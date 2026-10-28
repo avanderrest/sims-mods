@@ -72,6 +72,80 @@ def is_friend(score, threshold):
     return score is not None and score >= threshold
 
 
+# --- Club wealth labels ----------------------------------------------------------------
+_RELATIVE_LABELS = {
+    POOR: "Poorer than the club leader",
+    AVERAGE: "Similar to the club leader",
+    RICH: "Richer than the club leader",
+}
+
+# Ranged variants, used in the club rule screen when the leader's household value is known.
+# {0.Number}/{1.Number} are localization tokens filled by the game layer.
+_RELATIVE_RANGES = {
+    POOR: "Poorer than the club leader (under \u00a7{0.Number})",
+    AVERAGE: "Similar to the club leader (\u00a7{0.Number}-\u00a7{1.Number})",
+    RICH: "Richer than the club leader (\u00a7{0.Number} or more)",
+}
+
+
+# Shown when editing a club kicks members out. {0.String} is the club's display name and
+# {1.String} the removed members, so the game can fill in the club's own (localized) name.
+CLUB_MEMBERS_REMOVED = "{0.String} no longer match the club: {1.String}"
+
+
+def _relative_key(category):
+    key = _category(category)
+    if isinstance(key, str):
+        for number, name in _CATEGORY_NAMES.items():
+            if name.lower() == key:
+                return number
+    return key
+
+
+def relative_wealth_label(category):
+    """The club rule screen label for a household-value category, or None if unknown.
+
+    The game's own labels state fixed ranges. Under `club_relative_wealth` those ranges are
+    relative to the club leader, so the club UI uses these labels instead.
+    """
+    return _RELATIVE_LABELS.get(_relative_key(category))
+
+
+def relative_wealth_label_with_ranges(category, leader_net_worth, band=0.5):
+    """(label, tokens) with the leader-relative range filled in, or None if unknown.
+
+    The label is a localization template; tokens are the numbers for its
+    {0.Number}/{1.Number} placeholders. None when there is no usable leader net worth (the
+    game layer then shows the plain label above).
+    """
+    key = _relative_key(category)
+    if key not in _RELATIVE_RANGES or leader_net_worth is None or leader_net_worth <= 0:
+        return None
+    bounds = wealth_bounds(key, leader_net_worth, band)
+    if bounds is None:
+        return None
+    low, high = bounds
+    if key == POOR:
+        # "under X" is the first value that is not Poor any more.
+        return _RELATIVE_RANGES[POOR], (high + 1,)
+    if key == AVERAGE:
+        return _RELATIVE_RANGES[AVERAGE], (low, high)
+    return _RELATIVE_RANGES[RICH], (low,)
+
+
+def string_key(text):
+    """The 32-bit key the game's string tables use for `text`.
+
+    Same FNV-1a hash as tools/tuning.py, so a label here resolves the text shipped in
+    mods/social-gates/text/.
+    """
+    value = 0x811C9DC5
+    for byte in text.lower().encode("utf-8"):
+        value = (value * 0x01000193) & 0xFFFFFFFF
+        value ^= byte
+    return value
+
+
 # --- Relative household value ----------------------------------------------------------
 def wealth_bounds(category, leader_net_worth, band=0.5):
     """(low, high) inclusive bounds for one category, relative to the leader; high can be None.

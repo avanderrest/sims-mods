@@ -1,0 +1,3 @@
+# Notifications shown while editing a club. Also used by sg_logic.CLUB_MEMBERS_REMOVED and
+# hashed with the same FNV-1a key by tools/tuning.py.
+{0.String} no longer match the club: {1.String}

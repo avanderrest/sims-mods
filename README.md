@@ -253,9 +253,21 @@ Makes social access mean something, without adding clicks:
 - **Club wealth is relative.** The game's fixed `Poor` / `Average` / `Rich` household-value
   brackets become **poorer than**, **similar to**, or **richer than the club leader**. By
   default "similar" means between half and 1.5× the leader's household net worth. The leader
-  is the only sim who can edit the club, so the bracket follows whoever leads it.
-- **Money never auto-kicks you.** Getting richer can't silently remove a member; membership is
-  only re-checked when the club is edited.
+  is the only sim who can edit the club, so the bracket follows whoever leads it. The club
+  rule screen shows the leader's current ranges, for example **Poorer than the club leader
+  (under §5,000)**, **Similar to the club leader (§5,000-§15,000)** and **Richer than the
+  club leader (§15,001 or more)**; the saved rule keeps the short label so it cannot go
+  stale. The add-member picker uses the same rule, so a poor club can add poor members
+  instead of being held to EA's fixed §10,000-§500,000 bracket. Game-owned clubs keep EA's
+  wording and brackets unless `club_enforce_premade` is on. Turning `club_relative_wealth`
+  off restores the game's labels.
+- **Money never auto-kicks you from a player club.** The game re-checks membership on events
+  (marriage, aging, career changes, earning simoleons, leaving build/buy); Social Gates
+  suppresses only the household-value part for player clubs, so a funds change cannot remove
+  a member. The other criteria still apply — for example, marrying out of a club with a
+  "not in a relationship" rule still removes the member. Wealth is re-checked when the club
+  is edited. Game-owned clubs keep EA's fixed-bracket event checks unless
+  `club_enforce_premade` is on.
 
 Settings are saved in `Mods\HouseRules\data\social_gates.json`.
 

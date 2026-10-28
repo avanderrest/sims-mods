@@ -8,6 +8,7 @@ nothing is built if a test fails.
 For each folder in mods/ (or only the ones named):
   mods/<name>/scripts/**.py   -> compiled and zipped into build/<creator>_<name>.ts4script
   mods/<name>/tuning/*.xml      -> build/<creator>_<name>.package (see tuning.py)
+  mods/<name>/text/*.txt        -> string-table entries in that same package (see tuning.py)
   mods/<name>/package/*.package -> copied as-is (made in Sims 4 Studio)
   mods/<name>/install/**        -> copied into Mods/<creator>/ as they are (e.g. example
                                    scenario files; same-named files there are overwritten)
