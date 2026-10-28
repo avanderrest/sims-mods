@@ -390,6 +390,16 @@ def should_move_out(age_name, roll, chance=None):
     return roll < chance
 
 
+def sim_name(first_name, last_name, default="sim"):
+    """A readable sim name from its parts.
+
+    `SimInfo.full_name` is a stub in the game that returns "" (see
+    sims/sim_info_base_wrapper.py), so every log line built from it said " moved in with ".
+    """
+    name = "{} {}".format(first_name or "", last_name or "").strip()
+    return name or default
+
+
 def horse_household_ok(lot_width, lot_height, funds):
     """A horse is only plausible on a large lot with enough money for its upkeep."""
     area = (lot_width or 0) * (lot_height or 0)

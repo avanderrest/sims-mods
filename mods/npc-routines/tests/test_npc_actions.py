@@ -1,9 +1,11 @@
 import pytest
 
 from npc_actions import (BLACKLIST_HOURS, DEFAULT_WAIT_MINUTES, MAX_ACTIONS, MAX_PER_CATEGORY,
-                         MAX_VARIANTS, MAX_WAIT_MINUTES, MIN_WAIT_MINUTES, actions_for_goal,
+                         MAX_VARIANTS, MAX_WAIT_MINUTES, MIN_WAIT_MINUTES,
+                         REPEAT_BLACKLIST_HOURS, actions_for_goal,
                          actions_for_needs, actions_for_wants, activity_for_goal, balance,
-                         build_candidates, buff_names, category_for, clamp_minutes, clean_label,
+                         blacklist_hours, build_candidates, buff_names, category_for,
+                         clamp_minutes, clean_label,
                          describe_missing, everyday_actions, examples_for, format_minutes,
                          interleave, is_action, is_chore, is_internal, is_noise_object,
                          is_phone_chat,
@@ -158,6 +160,14 @@ def test_a_refused_action_comes_back_after_a_few_hours():
     assert still_failed(now - 0.05, now)          # ~1.2 hours ago: still hidden
     assert not still_failed(now - BLACKLIST_HOURS / 24.0 - 0.01, now)
     assert not still_failed(None, now)
+
+
+@pytest.mark.parametrize("strikes,hours", [
+    (None, BLACKLIST_HOURS), (1, BLACKLIST_HOURS), (2, REPEAT_BLACKLIST_HOURS),
+    (7, REPEAT_BLACKLIST_HOURS), ("nonsense", BLACKLIST_HOURS),
+])
+def test_a_repeatedly_refused_action_stays_out_longer(strikes, hours):
+    assert blacklist_hours(strikes) == hours
 
 
 def test_a_goal_with_nothing_to_do_it_with_is_reported_missing():
@@ -345,8 +355,9 @@ def test_actions_for_goal(goal, actions, expected):
      "Bladder 12", ["toilet use"]),
     # ... and the next one is used when the lowest has nothing on the lot
     (["Bladder 12", "Hunger 28"], ["fridge cook", "sit"], "Hunger 28", ["fridge cook"]),
-    # nothing addresses any of them
-    (["Bladder 12", "Hunger 28"], ["sit"], None, []),
+    # nothing addresses any of them: the lowest need is still named, so the caller can
+    # start its own self-care instead of losing which need was urgent
+    (["Bladder 12", "Hunger 28"], ["sit"], "Bladder 12", []),
     ([], ["toilet use"], None, []),
 ])
 def test_the_lowest_need_is_prioritised(pressing, actions, entry, matches):

@@ -282,6 +282,13 @@ def test_clean_reason_leaves_normal_text_alone():
     assert clean_reason("she wants to practise") == "she wants to practise"
 
 
+def test_clean_reason_keeps_only_the_first_line():
+    # qwen2.5:3b-instruct sometimes keeps explaining after the reason it was asked for.
+    assert clean_reason("she wants to sit in comfort\n\nThis decision is based on her mood."
+                        ) == "she wants to sit in comfort"
+    assert clean_reason("she wants to sit\r\nbecause she is tired") == "she wants to sit"
+
+
 def test_prompt_says_when_the_goal_is_blocked_but_present():
     prompt, _ = build_prompt(SIM, "x", ["sit"], goal="become a famous painter",
                              missing=[], blocked=["painting (e.g. an easel)"])

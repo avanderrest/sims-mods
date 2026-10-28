@@ -20,6 +20,26 @@ def all_complete(levels, is_completed):
     return bool(levels) and all(is_completed(level) for level in levels)
 
 
+def track_is_selectable(track):
+    """True when the player could pick this aspiration track at all.
+
+    Two kinds of track are not selectable and must never be completed ahead of time:
+    - `is_hidden_unlockable`: EA says these are "never able to be selected in CAS, even if
+      unlocked" (they are assigned by gameplay, e.g. scenarios).
+    - `override_traits`: EA uses this tunable for the FTUE/tutorial tracks (Settling In,
+      the tutorial's Style/Painter/Athlete/Culinary milestones).
+    A track with neither is a normal aspiration: selected or not, its levels count.
+    """
+    if getattr(track, "is_hidden_unlockable", False):
+        return False
+    if getattr(track, "override_traits", None):
+        return False
+    # Belt and braces: the tutorial tracks are named FTUE_* (FTUE_Style, FTUE_Painter...).
+    if str(getattr(track, "__name__", "") or "").upper().startswith("FTUE"):
+        return False
+    return True
+
+
 def index_tracks(tracks):
     """tracks: iterable of (track, [level, ...]) -> {level: [track, ...]} (a level can in
     principle belong to more than one track)."""

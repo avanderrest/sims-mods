@@ -20,7 +20,17 @@ Local LLM (optional; needs Ollama or LM Studio running on this computer):
   houserules.npc.actions [sim]           - what the brain is offered for this sim right now
   houserules.npc.think [sim]             - show the last prompt and answer (and thinking, if any)
   houserules.npc.reasoning on|off        - ask a thinking model for its working too (needs qwen3 etc.)
+
+JSON rules (the main way to run a sim):
+  houserules.npc.rules_list              - rule files in Mods\HouseRules\data\rules
+  houserules.npc.rules_load <file> [sim|all] - load rules/painter.json onto a sim (or everyone)
+  houserules.npc.rules_pick [sim]        - same, from a menu of the files in data/rules
+  houserules.npc.rules_show [sim]        - the rules assigned to a sim, and what would fire now
+  houserules.npc.rules_test [sim]        - evaluate without doing anything
+  houserules.npc.rules_clear [sim|all]   - remove them (the sim goes back to routine/LLM)
 """
+import json
+
 import services
 import sims4.commands
 from server_commands.argument_helpers import OptionalSimInfoParam, get_optional_target
@@ -30,6 +40,7 @@ from ui.ui_dialog_picker import ObjectPickerRow, UiDialogObjectPicker, UiObjectP
 import npc_llm
 import npc_log
 import npc_main
+import npc_rules
 from npc_routine import ACTIVITIES, DAY_NAMES, RoutineEntry
 
 _DAY_LABELS = ("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")
@@ -76,6 +87,7 @@ def open_editor(sim_info):
     sim_id = sim_info.sim_id
     on = sim_id in npc_main._npc_mode_sim_ids
     options = [("Add an activity", "add"), ("Show the routine", "show"), ("Clear the routine", "clear"),
+               ("Load a JSON rule routine", "rules"),
                ("Turn NPC mode {}".format("off" if on else "on"), "toggle")]
     _pick(sim_info, "NPC Routine: {}".format(sim_info.first_name),
           "NPC mode is {}. What would you like to do?".format("ON" if on else "off"),
@@ -97,6 +109,8 @@ def _menu_choice(sim_info, choice):
         npc_main._save()
         npc_log.log("routine editor: cleared sim {}".format(sim_id))
         npc_main._notify(sim_info, "Routine cleared", "{} has no routine activities now.".format(sim_info.first_name))
+    elif choice == "rules":
+        _choose_rule_file(sim_info)
     elif choice == "toggle":
         if sim_id in npc_main._npc_mode_sim_ids:
             npc_main._npc_mode_sim_ids.discard(sim_id)
@@ -359,3 +373,181 @@ def npc_llm_test(opt_sim: OptionalSimInfoParam = None, _connection=None):
         return
     npc_main._ask_now(sim_info, output)
     output("Asked. The answer is applied in a few seconds.")
+
+
+# --- JSON rules -----------------------------------------------------------------------------
+def _rule_line(number, rule):
+    """One rule as a readable line: '2. skill painting above 3 -> paint (90 min)'."""
+    when = "always" if not rule.get("if") else json.dumps(rule["if"], sort_keys=True)
+    then = rule.get("then") or {}
+    line = "  {}. {} -> {}".format(number, when, then.get("action", "?"))
+    if then.get("minutes"):
+        line += " ({})".format(npc_main.format_minutes(then["minutes"]))
+    if then.get("reason"):
+        line += " - " + then["reason"]
+    return line
+
+
+@sims4.commands.Command("houserules.npc.rules_list", command_type=sims4.commands.CommandType.Live)
+def npc_rules_list(_connection=None):
+    r"""The rule files in Mods\HouseRules\data\rules (use the short name with rules_load)."""
+    output = sims4.commands.CheatOutput(_connection)
+    names = npc_rules.list_rule_files()
+    output("Rule files in {}:".format(npc_rules.RULES_DIR))
+    for name in names:
+        output("  " + name)
+    if not names:
+        output("  (none - put a .json file there, e.g. painter.json)")
+
+
+@sims4.commands.Command("houserules.npc.rules_load", command_type=sims4.commands.CommandType.Live)
+def npc_rules_load(*words, _connection=None):
+    """houserules.npc.rules_load <file> [sim|all] - load a JSON rule routine onto a sim."""
+    output = sims4.commands.CheatOutput(_connection)
+    words = [str(word) for word in words if str(word).strip()]
+    if not words:
+        output("Usage: houserules.npc.rules_load <file> [sim|all]")
+        npc_rules_list(_connection)
+        return
+    filename = words[0]
+    sims = _matching_sims(words[1:])
+    if not sims:
+        output("No matching sim. Name one, use 'all', or select a sim first.")
+        return
+    ruleset, error = _assign_rules(sims, filename)
+    if error:
+        output("Could not load {}: {}".format(filename, error))
+        return
+    output("Loaded {} rules from {} for {}.".format(
+        len(ruleset["rules"]), ruleset.get("source") or filename,
+        ", ".join(sim_info.first_name for sim_info in sims)))
+    for number, rule in enumerate(ruleset["rules"], 1):
+        output(_rule_line(number, rule))
+
+
+def _assign_rules(sims, filename):
+    """Load a rule file and assign it to these sims. Returns (ruleset, error message)."""
+    try:
+        path = npc_rules.resolve_rule_file(filename)
+        ruleset = npc_rules.load_ruleset(path)
+    except (OSError, ValueError) as e:
+        npc_log.log("rules.load failed for {!r}: {}".format(filename, e), level="WARN")
+        return None, e
+    npc_main._ensure_loaded()
+    for sim_info in sims:
+        npc_main._rules_store.assign(sim_info.sim_id, ruleset)
+        npc_main._npc_mode_sim_ids.add(sim_info.sim_id)
+        npc_main._forget(sim_info.sim_id)      # a new rule set starts from a clean slate
+    npc_main._save_rules()
+    npc_main._save_npc_mode()
+    npc_log.log("rules.load {} for sims {}".format(
+        ruleset.get("source") or filename, [s.sim_id for s in sims]))
+    return ruleset, None
+
+
+@sims4.commands.Command("houserules.npc.rules_pick", command_type=sims4.commands.CommandType.Live)
+def npc_rules_pick(opt_sim: OptionalSimInfoParam = None, _connection=None):
+    """Pick a JSON rule file from a menu and load it onto this sim (no typing)."""
+    output = sims4.commands.CheatOutput(_connection)
+    sim_info = _target(opt_sim, _connection)
+    if sim_info is None:
+        output("No sim found (select one or pass a sim id).")
+        return
+    _choose_rule_file(sim_info)
+
+
+def _choose_rule_file(sim_info):
+    """The JSON files in data\\rules, as a picker - one is loaded onto the sim."""
+    names = npc_rules.list_rule_files()
+    if not names:
+        npc_main._notify(sim_info, "No rule files",
+                         "Put a .json file in {} and try again.".format(npc_rules.RULES_DIR))
+        return
+    _pick(sim_info, "Rule routine: {}".format(sim_info.first_name),
+          "Which JSON file should run {}?".format(sim_info.first_name),
+          [(name, name) for name in names],
+          lambda picked: _loaded_rule_notice(sim_info, picked[0]))
+
+
+def _loaded_rule_notice(sim_info, filename):
+    ruleset, error = _assign_rules([sim_info], filename)
+    if error:
+        npc_main._notify(sim_info, "Could not load {}".format(filename), str(error))
+        return
+    npc_main._notify(sim_info, "Rules loaded",
+                     "{} now follows {} ({} rules).".format(
+                         sim_info.first_name, ruleset.get("name") or filename,
+                         len(ruleset["rules"])))
+
+
+@sims4.commands.Command("houserules.npc.rules_show", command_type=sims4.commands.CommandType.Live)
+def npc_rules_show(opt_sim: OptionalSimInfoParam = None, _connection=None):
+    """The JSON rules assigned to this sim, plus the rule that would fire right now."""
+    output = sims4.commands.CheatOutput(_connection)
+    sim_info = _target(opt_sim, _connection)
+    if sim_info is None:
+        return
+    npc_main._ensure_loaded()
+    ruleset = npc_main._rules_store.get(sim_info.sim_id)
+    if not ruleset:
+        output("{} has no JSON rules. Load some with houserules.npc.rules_load <file>. "
+               "The LLM (goal/description) decides instead.".format(sim_info.first_name))
+        return
+    output("{}: {} ({} rules from {})".format(
+        sim_info.first_name, ruleset.get("name") or "rules",
+        len(ruleset["rules"]), ruleset.get("source") or "npc_rules.json"))
+    for number, rule in enumerate(ruleset["rules"], 1):
+        output(_rule_line(number, rule))
+    npc_rules_choice(sim_info, ruleset, output)
+
+
+@sims4.commands.Command("houserules.npc.rules_test", command_type=sims4.commands.CommandType.Live)
+def npc_rules_test(opt_sim: OptionalSimInfoParam = None, _connection=None):
+    """Evaluate the sim's rules now and print the choice, without doing anything."""
+    output = sims4.commands.CheatOutput(_connection)
+    sim_info = _target(opt_sim, _connection)
+    if sim_info is None:
+        return
+    npc_main._ensure_loaded()
+    ruleset = npc_main._rules_store.get(sim_info.sim_id)
+    if not ruleset:
+        output("{} has no JSON rules. Load some with houserules.npc.rules_load <file>.".format(
+            sim_info.first_name))
+        return
+    npc_rules_choice(sim_info, ruleset, output)
+
+
+def npc_rules_choice(sim_info, ruleset, output):
+    """Print what the rules decide for the sim right now (shared by show/test)."""
+    try:
+        choice, notes, _candidates = npc_main._evaluate_rules(sim_info, ruleset)
+    except Exception:
+        npc_log.log_exception("evaluating the JSON rules")
+        output("Could not evaluate the rules - see the log.")
+        return
+    for note in notes:
+        output("  " + note)
+    if choice is None:
+        output("No rule matches right now{} - the routine (and then the LLM) still applies."
+               .format("" if not notes else " (unavailable actions above)"))
+        return
+    output("Now: rule {} -> {} for {}{}".format(
+        choice.number, choice.action or "do nothing", npc_main.format_minutes(choice.minutes),
+        " ({})".format(choice.reason) if choice.reason else ""))
+
+
+@sims4.commands.Command("houserules.npc.rules_clear", command_type=sims4.commands.CommandType.Live)
+def npc_rules_clear(*words, _connection=None):
+    """Remove the JSON rules from a sim (default: selected), or from all with 'all'."""
+    output = sims4.commands.CheatOutput(_connection)
+    sims = _matching_sims(words)
+    if not sims:
+        output("No matching sim. Name one, use 'all', or select a sim first.")
+        return
+    npc_main._ensure_loaded()
+    for sim_info in sims:
+        npc_main._rules_store.remove(sim_info.sim_id)
+        npc_main._forget(sim_info.sim_id)
+    npc_main._save_rules()
+    output("Cleared the JSON rules for {}.".format(
+        ", ".join(sim_info.first_name for sim_info in sims)))

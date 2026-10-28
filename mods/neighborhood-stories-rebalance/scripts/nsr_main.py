@@ -56,6 +56,13 @@ _last_children = []  # filled in by the daily couple child step
 _applied_already = False  # guards against re-multiplying weights on every zone load
 
 
+def _sim_name(sim_info, default="sim"):
+    """A readable name for the logs. SimInfo.full_name is a stub returning "" in the game,
+    so every line built from it read " moved in with "."""
+    return nsr_life.sim_name(getattr(sim_info, "first_name", ""),
+                             getattr(sim_info, "last_name", ""), default)
+
+
 def _apply_rebalance():
     global _applied_already, _last_summary
     if _applied_already:
@@ -190,14 +197,14 @@ def _patched_family_member_setup(self, **kwargs):
                     "Horse adoption needs a Neighborhood Stories household.")
             if not _story_progression_enabled(household):
                 nsr_log.log("horse adoption blocked for {}: story progression is off".format(
-                    getattr(sim_info, "full_name", "sim")))
+                    _sim_name(sim_info)))
                 return StoryProgressionResult(
                     StoryProgressionResultType.FAILED_TESTS,
                     "Horse adoption needs Neighborhood Stories to be on.")
             owner_arc = getattr(self, "_owner_arc", None)
             if not _story_progression_allows(household, owner_arc):
                 nsr_log.log("horse adoption blocked for {}: the household's horse rule is off".format(
-                    getattr(sim_info, "full_name", "sim")))
+                    _sim_name(sim_info)))
                 return StoryProgressionResult(
                     StoryProgressionResultType.FAILED_TESTS,
                     "Horse adoption is disabled for this household.")
@@ -206,7 +213,7 @@ def _patched_family_member_setup(self, **kwargs):
             if not nsr_life.should_allow_horse_adoption(width, height, funds, roll):
                 nsr_log.log("horse adoption blocked for {}: lot {}x{} ({} tiles), "
                             "funds {}, roll {:.3f}".format(
-                                getattr(sim_info, "full_name", "sim"), width, height,
+                                _sim_name(sim_info), width, height,
                                 width * height, funds, roll))
                 return StoryProgressionResult(
                     StoryProgressionResultType.FAILED_TESTS,
@@ -376,15 +383,15 @@ def _relationship_change_gate(action):
             friendship = None
     if "becomingbestfriends" in arc_name and friendship is not None and friendship < 50:
         nsr_log.log("relationship arc blocked for {} + {}: best friends from friendship {}".format(
-            getattr(sim_info_a, "full_name", "sim"),
-            getattr(sim_info_b, "full_name", "sim"), friendship))
+            _sim_name(sim_info_a),
+            _sim_name(sim_info_b), friendship))
         return StoryProgressionResult(
             StoryProgressionResultType.FAILED_TESTS,
             "Cannot become best friends without an existing close friendship.")
     if "becomingdespised" in arc_name and friendship is not None and friendship > -20:
         nsr_log.log("relationship arc blocked for {} + {}: despised from friendship {}".format(
-            getattr(sim_info_a, "full_name", "sim"),
-            getattr(sim_info_b, "full_name", "sim"), friendship))
+            _sim_name(sim_info_a),
+            _sim_name(sim_info_b), friendship))
         return StoryProgressionResult(
             StoryProgressionResultType.FAILED_TESTS,
             "Cannot become despised without an already hostile relationship.")
@@ -394,8 +401,8 @@ def _relationship_change_gate(action):
             level = _compatibility_level_name(sim_info_a, sim_info_b, relationship)
             if str(level).upper() not in ("GOOD", "AMAZING"):
                 nsr_log.log("romance start blocked for {} + {}: compatibility {}".format(
-                    getattr(sim_info_a, "full_name", "sim"),
-                    getattr(sim_info_b, "full_name", "sim"), level))
+                    _sim_name(sim_info_a),
+                    _sim_name(sim_info_b), level))
                 return StoryProgressionResult(
                     StoryProgressionResultType.FAILED_TESTS,
                     "Romance needs GOOD or AMAZING compatibility.")
@@ -583,8 +590,8 @@ def _daily_romance_step():
                 romanced.add(sim_info_a.sim_id)
                 romanced.add(sim_info_b.sim_id)
                 line = "{} + {} ({}, {}, chance {:.1%})".format(
-                    getattr(sim_info_a, "full_name", "sim"),
-                    getattr(sim_info_b, "full_name", "sim"), level, age_name, chance)
+                    _sim_name(sim_info_a),
+                    _sim_name(sim_info_b), level, age_name, chance)
                 _last_romances.append(line)
                 del _last_romances[:-50]
                 nsr_log.log("daily romance: " + line)
@@ -638,14 +645,14 @@ def _daily_move_in_step():
                     pass
             except Exception:
                 nsr_log.log_exception("daily move-in: moving {}".format(
-                    getattr(mover, "full_name", "sim")))
+                    _sim_name(mover)))
                 continue
             handled.add(sim_info_a.sim_id)
             handled.add(sim_info_b.sim_id)
             line = "{} moved in with {} ({}, chance {:.0%})".format(
-                getattr(mover, "full_name", "sim"),
-                getattr(sim_info_a if mover is sim_info_b else sim_info_b,
-                        "full_name", "sim"), reason, chance)
+                _sim_name(mover),
+                _sim_name(sim_info_a if mover is sim_info_b else sim_info_b),
+                reason, chance)
             _last_move_ins.append(line)
             del _last_move_ins[:-50]
             nsr_log.log("daily move-in: " + line)
@@ -715,7 +722,7 @@ def _patched_make_pregnant_setup(self, **kwargs):
     try:
         sim_info = getattr(getattr(self, "_owner_arc", None), "sim_info", None)
         if sim_info is not None:
-            name = getattr(sim_info, "full_name", "sim")
+            name = _sim_name(sim_info)
             gender_name = _gender_name(sim_info)
             if not nsr_life.gender_can_be_pregnant(gender_name):
                 nsr_log.log("pregnancy blocked for {}: {} sims do not get pregnant".format(
@@ -808,7 +815,7 @@ def _daily_couple_child_step():
             result = adopter.story_progression_tracker.add_arc(arc)
         except Exception:
             nsr_log.log_exception("daily child: adding {} to {}".format(
-                getattr(arc, "__name__", arc), getattr(adopter, "full_name", "sim")))
+                getattr(arc, "__name__", arc), _sim_name(adopter)))
             continue
         if not result:
             continue
@@ -816,8 +823,8 @@ def _daily_couple_child_step():
             "same_sex_adoption" if same_sex else
             ("opposite_sex_pregnancy" if kind == "pregnancy" else "opposite_sex_adoption"))
         line = "{} + {} -> {} ({}, chance {:.1%})".format(
-            getattr(sim_info_a, "full_name", "sim"),
-            getattr(sim_info_b, "full_name", "sim"),
+            _sim_name(sim_info_a),
+            _sim_name(sim_info_b),
             getattr(arc, "__name__", arc), kind, chance)
         _last_children.append(line)
         del _last_children[:-50]
@@ -1039,7 +1046,7 @@ def _move_to_university_housing(sim_info, original_home_zone_id):
             else:
                 target = household_manager.create_household(account, starting_funds=0)
                 target.name = (getattr(sim_info, "last_name", None)
-                               or getattr(sim_info, "full_name", "University household"))
+                               or _sim_name(sim_info, "University household"))
                 target.set_household_lot_ownership(zone_id)
                 target.save_data()
 
@@ -1063,7 +1070,7 @@ def _move_to_university_housing(sim_info, original_home_zone_id):
             except Exception:
                 pass
             nsr_log.log("age-up university: {} moved into university housing zone {}".format(
-                getattr(sim_info, "full_name", "sim"), zone_id))
+                _sim_name(sim_info), zone_id))
             return True
         except Exception:
             nsr_log.log_exception("age-up university: moving into university housing")
@@ -1109,7 +1116,7 @@ def _maybe_enroll_in_university(sim_info, new_age, current_age):
     net_worth = _household_net_worth(household)
     chance = nsr_life.university_chance(net_worth)
     roll = random.random()
-    who = getattr(sim_info, "full_name", "sim")
+    who = _sim_name(sim_info)
     if not nsr_life.should_enroll_in_university(net_worth, roll):
         nsr_log.log("age-up university: {} rolled {:.2f} against {:.0%} "
                     "(net worth §{}); not enrolling".format(who, roll, chance, net_worth))
@@ -1185,12 +1192,12 @@ def _move_out_of_university_housing(sim_info, destination_zone_id):
         try:
             target = household_manager.create_household(account, starting_funds=0)
             target.name = (getattr(sim_info, "last_name", None)
-                           or getattr(sim_info, "full_name", "Graduate household"))
+                           or _sim_name(sim_info, "Graduate household"))
             target.save_data()
             created = True
         except Exception:
             nsr_log.log_exception("age-up graduation: creating a household for {}".format(
-                getattr(sim_info, "full_name", "sim")))
+                _sim_name(sim_info)))
             return False
 
     try:
@@ -1210,7 +1217,7 @@ def _move_out_of_university_housing(sim_info, destination_zone_id):
         except Exception:
             pass
         nsr_log.log("age-up graduation: {} moved out of university housing into {}".format(
-            getattr(sim_info, "full_name", "sim"),
+            _sim_name(sim_info),
             "the family home" if not created else "a new household"))
         return True
     except Exception:
@@ -1250,7 +1257,7 @@ def _maybe_graduate_from_university(sim_info, new_age, current_age):
     except Exception:
         return False
 
-    who = getattr(sim_info, "full_name", "sim")
+    who = _sim_name(sim_info)
     destination_zone_id = getattr(degree_tracker, "kickout_destination_zone", 0) or 0
     try:
         gpa = degree_tracker.get_gpa()
@@ -1313,7 +1320,7 @@ def _maybe_assign_career(sim_info, new_age, current_age):
     age_name = getattr(new_age, "name", str(new_age))
     chance = nsr_life.career_chance(age_name)
     roll = random.random()
-    who = getattr(sim_info, "full_name", "sim")
+    who = _sim_name(sim_info)
     if not nsr_life.should_assign_career(age_name, roll):
         nsr_log.log("age-up career: {} rolled {:.2f} against {:.0%}; no career this time".format(
             who, roll, chance))
@@ -1395,7 +1402,7 @@ def _maybe_split_household(sim_info, new_age, current_age):
     age_name = getattr(new_age, "name", str(new_age))
     chance = nsr_life.move_out_chance(age_name)
     roll = random.random()
-    who = getattr(sim_info, "full_name", "sim")
+    who = _sim_name(sim_info)
     if not nsr_life.should_move_out(age_name, roll):
         nsr_log.log("age-up move-out: {} rolled {:.2f} against {:.0%}; staying home".format(
             who, roll, chance))
@@ -1418,7 +1425,7 @@ def _maybe_split_household(sim_info, new_age, current_age):
 
     new_household = household_manager.create_household(account, starting_funds=0)
     new_household.name = (getattr(sim_info, "last_name", None)
-                          or getattr(sim_info, "full_name", "New household"))
+                          or _sim_name(sim_info, "New household"))
     try:
         new_household.save_data()
         household_manager.switch_sim_from_household_to_target_household(

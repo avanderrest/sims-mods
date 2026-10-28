@@ -80,8 +80,10 @@ def save():
     global _data_mtime
     try:
         os.makedirs(os.path.dirname(_PATH), exist_ok=True)
-        with open(_PATH, "w", encoding="utf-8") as f:
+        tmp = _PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data(), f, indent=1)
+        os.replace(tmp, _PATH)     # a reader (or start-llm.cmd) never sees half a file
         _data_mtime = _file_mtime()
     except Exception:
         npc_log.log_exception("saving npc_brain.json")

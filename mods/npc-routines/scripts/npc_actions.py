@@ -152,6 +152,18 @@ def is_action(label):
 # A refused action is not refused forever: "empty trash" fails when the bin is empty and works
 # later, so it comes back after this many sim hours.
 BLACKLIST_HOURS = 6
+# A label the game has refused more than once is not a transient state (the eco shower
+# upgrade was chosen 27 times in one day): keep it out four times as long.
+REPEAT_BLACKLIST_HOURS = BLACKLIST_HOURS * 4
+
+
+def blacklist_hours(strikes):
+    """How long a refused label stays out. One refusal is usually about state; a repeat is
+    about the action or object itself."""
+    try:
+        return REPEAT_BLACKLIST_HOURS if int(strikes) > 1 else BLACKLIST_HOURS
+    except (TypeError, ValueError):
+        return BLACKLIST_HOURS
 
 
 def still_failed(when, now_days, hours=BLACKLIST_HOURS):
@@ -629,13 +641,17 @@ def lowest_need_actions(pressing, actions):
     """Actions for the single lowest pressing need, falling back to the next one if nothing
     on the lot addresses it. `pressing` is ordered lowest-first (see _describe).
 
-    Returns (need entry, actions) or (None, [])."""
+    Returns (need entry, actions) or (None, []). When nothing on the lot serves any pressing
+    need, the lowest need is still returned with no actions: the caller can then try its own
+    curated self-care (a shower, a call) instead of losing which need is the urgent one."""
     for entry in pressing or ():
         matches = actions_for_needs([entry], actions)
         if matches:
             if str(entry).lower().startswith("hunger"):
                 matches = without_treats(matches)
             return entry, matches
+    if pressing:
+        return pressing[0], []
     return None, []
 
 

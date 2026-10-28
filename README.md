@@ -44,7 +44,7 @@ check `lastException*.txt` in `Documents\Electronic Arts\The Sims 4\`.
 | [Social Gates](#social-gates) | Social access means something: only friends let you into their house or accept an invite, and clubs only accept sims who fit their traits, skills or activities. |
 | [Aspiration Progress](#aspiration-progress) | Aspiration goals count whenever you complete them, even before you reach that level — and a level pays out as soon as all its goals are done. |
 | [Scenarios](#scenarios) | Play custom challenges from simple text files: starting conditions, goals that check themselves, and rules with penalties. Seven examples included. |
-| [NPC Routines](#npc-routines) | Give sims a weekly routine (gym on Mondays, painting after work) and let the game run their lives for you. Optional local-AI brain: give a sim a goal and start it on demand. |
+| [NPC Routines](#npc-routines) | Give sims a weekly routine (gym on Mondays, painting after work) and let the game run their lives for you. JSON rule files ("if toilet below 30 use the toilet") are the main way; an optional local-AI brain is still there. |
 
 There are also two developer mods, not needed for normal play:
 `HouseRules_hello-world.ts4script` (build pipeline check) and
@@ -339,6 +339,12 @@ aspiration's level — that level pays out its satisfaction points and reward st
 The aspiration's reward trait is still only given when the whole aspiration is finished.
 Completed goals are remembered when switching aspirations, and child/teen aspirations work too.
 
+Only aspirations you can actually pick count. Two kinds of track are left to the game and are
+never completed behind your back: **hidden** tracks (EA never offers these in CAS, even when
+unlocked) and the **tutorial/FTUE** tracks (Settling In and the tutorial's Style, Painter,
+Athlete and Culinary milestones). A level that belongs to no selectable track — for example a
+utility aspiration — is left alone too.
+
 ```
 houserules.asp.status [sim]   levels already done ahead of the sim's position
 houserules.asp.on             turn the mod on
@@ -421,7 +427,10 @@ needs up":
   autonomy fills the gaps.
 - Starter activities: workout, paint, read, chess, jog. Any real interaction name also works
   (`houserules.npc.find <text>` helps you find one).
-- Routines cover sims on the loaded lot. You can also give a sim a free-text personality and
+- Routines cover sims on the loaded lot. The main way to run a sim is a **JSON rule file**
+  ("if toilet is below 30 use the toilet, else if painting is above 3 paint") loaded with
+  `houserules.npc.rules_load`; see [JSON rule routines](#json-rule-routines-the-main-way-to-run-a-sim).
+  You can also give a sim a free-text personality and
   let an optional local LLM decide what they do from everything that lot actually offers:
   every interaction on every object (nearest first, the lot's chatterboxes giving way to the
   rest), plus jogging. The choices are grouped by kind - hygiene, eating, rest, fun, skills,
@@ -462,7 +471,13 @@ needs up":
   once an hour. The examples are only suggestions - the mod cannot buy or place objects, so
   this is where you come in.
 - Pausing the game (including Buy/Build mode) stops new decisions, but an answer already in
-  flight is still applied - the sim queues it and starts it when you unpause.
+  flight is still applied - the sim queues it and starts it when you unpause. Dialogs pause
+  the game too (the "does Grace like fishing?" popups, invites, chance cards), so an
+  unattended session stalls until someone answers them. For hands-off play, turn on
+  **Automatic UI Responses** in UI Cheats Extension (weerbesu,
+  [download](https://www.curseforge.com/sims4/mods/ui-cheats-extension)): it dismisses those
+  dialogs for you. Its own menu-cheat options are not needed for that, and it doesn't
+  conflict with these mods.
 - Give a sim a **goal** (`houserules.npc.goal <text>`) and the LLM decides their hours from
   that goal instead of their routine. It does not run on its own: start it with
   `houserules.npc.start` (`houserules.npc.start all` for the whole household), which asks
@@ -476,6 +491,56 @@ needs up":
 The AI part is optional and works entirely on your computer through
 [Ollama](https://ollama.com) or LM Studio. Without it running, routines still work. Default
 address: `http://localhost:11434/api/generate` with model `qwen2.5:3b-instruct`.
+
+### JSON rule routines (the main way to run a sim)
+
+A rule file is a plain JSON list, read from top to bottom; the first rule whose condition
+matches decides what the sim does, for how long, and the routine is evaluated again when
+that time is up. Rules take priority over the weekly routine and over the LLM: a sim with
+rules loaded is run by its rules.
+
+Put a file in `Mods\HouseRules\data\rules\painter.json`:
+
+```json
+{
+  "name": "painter",
+  "rules": [
+    {"if": {"need": "toilet", "below": 30}, "then": {"action": "use toilet", "minutes": 20}},
+    {"if": {"skill": "painting", "above": 3}, "then": {"action": "paint", "minutes": 90}},
+    {"if": {"emotion": "uncomfortable"}, "then": {"action": "nothing"}}
+  ]
+}
+```
+
+Then load it onto the selected sim (or the whole household):
+
+```
+houserules.npc.rules_load painter
+houserules.npc.rules_load painter all
+```
+
+or pick the file from a menu with `houserules.npc.rules_pick` (also in the
+`houserules.routine.edit` menu) - the JSON file itself is the thing you choose, and the
+sim's NPC mode is switched on at the same time.
+
+Conditions all have to hold within one rule (AND). `need` is 0-100 (`toilet` is the game's
+Bladder need; hunger, energy, hygiene, fun, social and the rest work by name), `skill` is a
+level, and both compare strictly with `below` / `above`. Also available: `emotion` (or
+`mood`), `buff`, `want`, `activity`, `weather`, `season`, `day` (`"mon"` or 0-6, 0=Sunday),
+`hour`, `hour_from`/`hour_to` (wrapping past midnight is fine), and `any` / `all` / `not` to
+combine them. A rule without `if` always matches, so it can be the last line.
+
+`then.action` can be any interaction label the lot offers (`houserules.npc.actions` lists
+them), one of the curated activities (workout, paint, read, chess, jog, shower, toilet, eat,
+sleep, wash hands, brush teeth, pay bills, ...), or `"nothing"` to leave the sim to the
+game's own autonomy. `minutes` is optional (default 60, 5-480). If a rule matches but that
+action is not available on this lot, the rule is skipped and the next one is tried. When no
+rule matches at all, the weekly routine (then the LLM, if the sim has one) still applies.
+
+Rules are assigned per sim and saved in `Mods\HouseRules\data\npc_rules.json`, so they
+survive a restart. `houserules.npc.rules_show` lists them and shows what would fire now;
+`houserules.npc.rules_test` only evaluates; `houserules.npc.rules_clear` removes them and
+hands the sim back to their routine or the LLM.
 
 ### Running the AI brain
 
@@ -515,7 +580,7 @@ routine instead of standing idle. The default `qwen2.5:3b-instruct` is deliberat
 most of your GPU stays with the game; change it with `houserules.npc.llm <url> <model>`.
 
 ```
-houserules.routine.edit [sim]                menu: add an activity / show / clear / NPC mode on-off
+houserules.routine.edit [sim]                menu: add an activity / show / clear / load a JSON rule routine / NPC mode on-off
 houserules.npc.on [sim]                      turn routine mode on
 houserules.npc.off [sim]                     turn routine mode off
 houserules.routine.add <days> <start> <hours> <activity>
@@ -537,9 +602,16 @@ houserules.npc.llm <url> <model>             point the mod at your local LLM
 houserules.npc.llm_test [sim]                ask the LLM now (applied a few seconds later)
 houserules.npc.think [sim]                   show the last prompt and answer (and reasoning)
 houserules.npc.reasoning on|off              ask a thinking model for its working too
+houserules.npc.rules_list                    rule files in Mods\HouseRules\data\rules
+houserules.npc.rules_load <file> [sim|all]   load a JSON rule routine onto a sim
+houserules.npc.rules_pick [sim]              pick the JSON file from a menu instead of typing it
+houserules.npc.rules_show [sim]              the rules and which one would fire now
+houserules.npc.rules_test [sim]              evaluate the rules without doing anything
+houserules.npc.rules_clear [sim|all]         remove the rules from a sim
 ```
 
-Routines are saved in `Mods\HouseRules\data\npc_routines.json`.
+Routines are saved in `Mods\HouseRules\data\npc_routines.json`; JSON rules are assigned in
+`Mods\HouseRules\data\npc_rules.json` and loaded from `Mods\HouseRules\data\rules\`.
 
 ## Conflicts
 

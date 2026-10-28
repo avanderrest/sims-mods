@@ -16,6 +16,11 @@ Cheats:
   houserules.npc.find <text>           - list real interaction names containing <text>
   houserules.npc.clubs <text>          - list club activities containing <text> and what they use
   houserules.npc.try <activity|name> [sim_id] - push it on the sim now, print the result
+  houserules.npc.rules_list            - rule files in Mods/HouseRules/data/rules
+  houserules.npc.rules_load <file> [sim|all] - load a JSON rule routine (the main way to run)
+  houserules.npc.rules_show [sim_id]   - the rules assigned to a sim, and what would fire now
+  houserules.npc.rules_test [sim_id]   - evaluate the rules without doing anything
+  houserules.npc.rules_clear [sim|all] - remove the rules (back to routine/LLM)
 
 Everything that touches real tuning/interaction names (ACTIVITY_AFFORDANCES below) is a
 best guess - there was no running game tonight to check real affordance tuning names
@@ -38,9 +43,11 @@ from sims4.resources import Types
 
 import npc_llm
 import npc_log
+import npc_rules
 from npc_actions import (MAX_ACTIONS, MAX_PER_OBJECT, SATISFIED_NEED, actions_for_goal,
                          actions_for_needs, actions_for_wants, activity_for_goal,
-                         balance, build_candidates, buff_names, category_rank, clamp_minutes,
+                         balance, blacklist_hours, build_candidates, buff_names,
+                         category_rank, clamp_minutes,
                          clean_label, describe_missing, everyday_actions, examples_for,
                          format_minutes, interleave,
                          is_action, is_chore, is_internal, is_noise_object,
@@ -55,8 +62,10 @@ from npc_routine import ACTIVITIES, DAY_NAMES, RoutineEntry, RoutineStore
 
 _ROUTINES_PATH = os.path.join(os.path.expanduser("~"), "Documents", "Electronic Arts",
                                "The Sims 4", "Mods", "HouseRules", "data", "npc_routines.json")
+_RULES_PATH = os.path.join(os.path.dirname(_ROUTINES_PATH), "npc_rules.json")
 
 _store = RoutineStore()
+_rules_store = npc_rules.RulesStore()
 _npc_mode_sim_ids = set()
 _loaded = False
 _alarm_handle = None
@@ -80,7 +89,7 @@ URGENT_INTERRUPT_MINUTES = 30
 GOAL_TURN_EVERY = 3     # every Nth decision offers only goal actions, if any exist
 _needed_examples = {}   # sim id -> concrete objects that would fix it
 MAX_OBJECTS_SHOWN = 20  # the prompt lists the nearest objects; the gap check sees all
-_failed_actions = {}    # sim id -> labels the game refused, so they are not offered again
+_failed_actions = {}    # sim id -> {label: (when refused, how many times)}
 _wake_handles = {}      # sim id -> alarm that asks again when its chosen wait is over
 _last_request = {}      # sim id -> (what it asked for, absolute day), so it is not repeated
 _logged = {}            # (kind, sim id) -> last message, so unchanged states log once
@@ -237,6 +246,10 @@ def _ensure_loaded():
     if not _loaded:
         _store.load(_ROUTINES_PATH)
         try:
+            _rules_store.load(_RULES_PATH)
+        except Exception:
+            npc_log.log_exception("loading npc_rules.json")
+        try:
             with open(_NPC_MODE_PATH, encoding="utf-8") as f:
                 _npc_mode_sim_ids.update(int(i) for i in json.load(f))
         except (OSError, ValueError):
@@ -252,6 +265,13 @@ def _save():
         _store.save(_ROUTINES_PATH)
     except Exception:
         npc_log.log_exception("saving routines")
+
+
+def _save_rules():
+    try:
+        _rules_store.save(_RULES_PATH)
+    except Exception:
+        npc_log.log_exception("saving the JSON rules")
 
 
 def _save_npc_mode():
@@ -622,6 +642,20 @@ def _run_tick(report=None, quiet=False):
         activity = routine.due_activity(day, hour)
         sim_info = sim_info_manager.get(sim_id)
         sim = sim_info.get_sim_instance() if sim_info is not None else None
+        # JSON rules decide first: they are the main way to run a sim now. The LLM only
+        # takes a sim that has no rules loaded. When no rule matches, the hourly routine
+        # below still applies (so a rules file can cover only part of the day).
+        ruleset = _rules_store.get(sim_id)
+        if sim is not None and ruleset:
+            if not _may_ask(sim_id, now):
+                continue
+            if _should_keep_waiting(sim_id, now) and not _urgent_interrupt(sim_id, sim_info, now):
+                if not quiet:
+                    _say(report, "  sim {}: still doing it - checking again soon".format(sim_id))
+                _reschedule_check(sim_id)
+                continue
+            if _apply_rules(sim_info, ruleset, report):
+                continue
         # A goal makes the LLM decide the hour, even when a routine entry is due: the player
         # asked for that sim to work towards the goal. Descriptions alone keep the old rule
         # (the routine wins, the LLM only fills idle hours).
@@ -912,6 +946,8 @@ def _describe(sim_info):
     except Exception:
         pass
     now = services.time_service().sim_timeline.now
+    desc["day"] = DAY_NAMES[now.day()]
+    desc["hour"] = now.hour()
     desc["time"] = "{} {}:00".format(DAY_NAMES[now.day()], now.hour())
     return desc
 
@@ -952,13 +988,27 @@ def _objects_by_distance(sim):
 
 def _recently_failed(sim_id):
     """Labels the game refused recently. They come back after BLACKLIST_HOURS, because many
-    refusals are about state (an empty bin, a dirty counter) rather than the action itself."""
+    refusals are about state (an empty bin, a dirty counter) rather than the action itself;
+    a label refused more than once stays out longer (see blacklist_hours)."""
     try:
         now = float(services.time_service().sim_timeline.now.absolute_days())
     except Exception:
         now = 0.0
-    return {label for label, when in _failed_actions.get(sim_id, {}).items()
-            if still_failed(when, now)}
+    return {label for label, (when, strikes) in _failed_actions.get(sim_id, {}).items()
+            if still_failed(when, now, hours=blacklist_hours(strikes))}
+
+
+def _record_failure(sim_id, label):
+    """Remember a refusal for this sim, counting repeats. The count only resets when the
+    brain is stopped for the sim, so a chronic offender keeps its longer blacklist after the
+    short window expires."""
+    try:
+        now = float(services.time_service().sim_timeline.now.absolute_days())
+    except Exception:
+        now = 0.0
+    previous = _failed_actions.get(sim_id, {}).get(label)
+    strikes = (previous[1] + 1) if previous else 1
+    _failed_actions.setdefault(sim_id, {})[label] = (now, strikes)
 
 
 def _object_label(obj):
@@ -1232,11 +1282,7 @@ def _never_started(sim_id, label):
     """The push was accepted but the sim never picked it up: treat it like a refusal."""
     _say(None, "  sim {}: {!r} never started - trying something else".format(sim_id, label),
          level="WARN")
-    try:
-        now = float(services.time_service().sim_timeline.now.absolute_days())
-    except Exception:
-        now = 0.0
-    _failed_actions.setdefault(sim_id, {})[label] = now
+    _record_failure(sim_id, label)
     _active_task.pop(sim_id, None)
     _task_deadline.pop(sim_id, None)
     sim_info = services.sim_info_manager().get(sim_id)
@@ -1375,6 +1421,69 @@ def _forget(sim_id):
         _logged.pop(key, None)
     _cancel_wake(sim_id)
     npc_llm.mark_active(sim_id, False)
+
+
+def _evaluate_rules(sim_info, ruleset):
+    """(choice, notes, candidates) for the lot as it is right now, without pushing anything.
+
+    `available` is what the lot offers plus the curated activity keys the game layer knows
+    how to start (paint, shower, pay bills...), minus anything the game recently refused."""
+    sim = sim_info.get_sim_instance()
+    if sim is None:
+        return None, [], []
+    candidates, _objects = _collect_candidates(sim)
+    refused = _recently_failed(sim.id)
+    available = [c.label for c in candidates]
+    extra = (sorted(ACTIVITIES) + sorted(NEED_ACTIVITY_NAMES)
+             + sorted(EVERYDAY_ACTIVITY_NAMES) + sorted(PHONE_ACTIVITIES))
+    for label in extra:
+        if label not in refused and label not in available:
+            available.append(label)
+    notes = []
+    choice = npc_rules.evaluate(ruleset, _describe(sim_info), available, notes)
+    return choice, notes, candidates
+
+
+def _apply_rules(sim_info, ruleset, report=None):
+    """Let the JSON rules decide for this sim. Returns True when a rule handled the sim;
+    False when nothing matched, so the routine/LLM below still gets its turn."""
+    sim_id = sim_info.sim_id
+    try:
+        choice, notes, candidates = _evaluate_rules(sim_info, ruleset)
+        for note in notes:
+            npc_log.log("rules for sim {}: {}".format(sim_id, note))
+        if choice is None:
+            if not notes:
+                _say(report, "  sim {}: no rule matches right now".format(sim_id))
+            return False
+        # A new choice replaces whatever we were watching.
+        _active_task.pop(sim_id, None)
+        _task_deadline.pop(sim_id, None)
+        _candidates[sim_id] = candidates
+        name = ruleset.get("name") or ruleset.get("source") or "rules"
+        if choice.action is None:
+            _say(report, "  sim {}: {} rule {} says do nothing for {} ({})".format(
+                sim_id, name, choice.number, format_minutes(choice.minutes),
+                choice.reason or "leave it to the game"))
+            _defer(sim_id, choice.minutes)
+            return True
+        _say(report, "  sim {}: {} rule {} -> {} for {} ({})".format(
+            sim_id, name, choice.number, choice.action, format_minutes(choice.minutes),
+            choice.reason or "no reason given"))
+        if _do_action(sim_info, sim_id, choice.action, choice.reason, report):
+            _defer(sim_id, choice.minutes)
+            return True
+        # The game refused it. A candidate label is already blacklisted by the push; a
+        # curated activity is not, so remember that here. The next decision skips both.
+        if not any(candidate.label == choice.action for candidate in candidates):
+            _record_failure(sim_id, choice.action)
+        _say(report, "  sim {}: the game would not start {!r} - checking again soon".format(
+            sim_id, choice.action), level="WARN")
+        _defer(sim_id, FAILED_WAIT_MINUTES)
+        return True
+    except Exception:
+        npc_log.log_exception("applying the JSON rules for sim {}".format(sim_id))
+        return False
 
 
 def _ask_llm(sim_info, report, allow_request=True, retries=3):
@@ -1665,7 +1774,7 @@ def _do_action(sim_info, sim_id, action, reason, report=None):
             except Exception:
                 pass
     elif action in ACTIVITIES or action in NEED_ACTIVITY_NAMES \
-            or action in EVERYDAY_ACTIVITY_NAMES:
+            or action in EVERYDAY_ACTIVITY_NAMES or action in PHONE_ACTIVITIES:
         ok = _push_activity(sim, action, report)
         if ok:
             _active_task[sim_id] = None
@@ -1725,11 +1834,7 @@ def _push_candidate(sim, candidate, report=None):
         except Exception:
             npc_log.log_exception("pushing {} on {}".format(candidate.label, target))
     # Every variant was refused: keep it out of the next prompt for a while.
-    try:
-        now = float(services.time_service().sim_timeline.now.absolute_days())
-    except Exception:
-        now = 0.0
-    _failed_actions.setdefault(sim.id, {})[candidate.label] = now
+    _record_failure(sim.id, candidate.label)
     return False, None
 
 

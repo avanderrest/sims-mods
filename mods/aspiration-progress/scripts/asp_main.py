@@ -11,9 +11,9 @@ How EA's aspirations work (aspirations/aspirations.py, event_testing/event_data_
 - Selecting an aspiration skips levels that are already complete; switching never resets goals.
 
 What this mod changes:
-1. On every zone load, every level of every aspiration track (child ones too) is registered,
-   so goals count whenever they happen. Goals of levels you haven't reached count from the
-   game's own lifetime totals (EA only resets a goal's count when its level becomes active).
+1. On every zone load, every level of every aspiration track a player can pick (child ones
+   too) is registered, so goals count whenever they happen. Hidden, FTUE/tutorial and
+   not-yet-granted tracks are left alone: those levels only complete the way EA intends.
 2. Levels flagged to only listen while active (do_not_register_events_on_load) listen anyway.
 3. complete_milestone, for aspiration levels: pays the level's reward straight away, and if
    the level belongs to the selected aspiration, moves the sim to the first level that isn't
@@ -31,6 +31,7 @@ import os
 import services
 import sims4.commands
 import sims4.resources
+from account_rewards.account_reward_enums import AccountRewardType
 from aspirations.aspiration_types import AspriationType
 from aspirations.aspirations import AspirationTracker
 from event_testing.event_data_tracker import EventDataTracker
@@ -38,7 +39,7 @@ from event_testing.test_events import TestEvent
 from server_commands.argument_helpers import OptionalSimInfoParam, get_optional_target
 
 import asp_log
-from asp_logic import ahead_of, all_complete, first_incomplete, index_tracks
+from asp_logic import ahead_of, all_complete, first_incomplete, index_tracks, track_is_selectable
 
 _SETTINGS_FILE = os.path.join(os.path.expanduser("~"), "Documents", "Electronic Arts", "The Sims 4", "Mods",
                               "HouseRules", "data", "aspiration_progress.json")
@@ -74,11 +75,28 @@ _tracks = None      # [(track, [level, ...] in order), ...]
 _index = None       # level -> [track, ...]
 
 
+def _track_granted(track):
+    """EA's own "can this sim pick the track" account-reward check (sim_info.py does the
+    same when it assigns a random aspiration). Unknown/older service: assume granted."""
+    try:
+        return services.is_granted_or_non_account_reward_item(
+            track.guid64, AccountRewardType.ASPIRATIONTRACK)
+    except Exception:
+        return True
+
+
 def _load_tracks():
     global _tracks, _index
     if _tracks is None:
         tracks = []
+        skipped = 0
         for track in services.get_instance_manager(sims4.resources.Types.ASPIRATION_TRACK).types.values():
+            # Hidden (never selectable in CAS), FTUE/tutorial and not-yet-granted tracks are
+            # not aspirations the player can pick: their levels must not be completed ahead
+            # of time.
+            if not track_is_selectable(track) or not _track_granted(track):
+                skipped += 1
+                continue
             try:
                 levels = [level for _, level in (track.get_aspirations() or ())]
             except Exception:
@@ -88,7 +106,8 @@ def _load_tracks():
                 tracks.append((track, levels))
         _tracks = tracks
         _index = index_tracks(tracks)
-        asp_log.log("aspiration tracks found: {} ({} levels)".format(len(_tracks), len(_index)))
+        asp_log.log("aspiration tracks found: {} ({} levels); skipped {} hidden/tutorial"
+                    .format(len(_tracks), len(_index), skipped))
     return _tracks, _index
 
 
@@ -114,7 +133,14 @@ def _should_handle_event(self, milestone, event, resolver):
     if result or not _enabled():
         return result
     try:
-        if milestone.aspiration_type == AspriationType.FULL_ASPIRATION and milestone.do_not_register_events_on_load \
+        if milestone.aspiration_type != AspriationType.FULL_ASPIRATION:
+            return result
+        _, index = _load_tracks()
+        if milestone not in index:
+            # A hidden, FTUE/tutorial or utility aspiration (no selectable track): leave
+            # its events to the game instead of counting them ahead of time.
+            return result
+        if milestone.do_not_register_events_on_load \
                 and EventDataTracker._should_handle_event(self, milestone, event, resolver):
             return True
     except Exception:
@@ -122,11 +148,30 @@ def _should_handle_event(self, milestone, event, resolver):
     return result
 
 
+def _available_for(tracks, sim_info):
+    """True when at least one track containing this level is one the sim could pick now.
+
+    The tracks in the index are already the selectable, granted ones (see _load_tracks);
+    this adds the per-sim age/occult check EA uses."""
+    for track in tracks:
+        try:
+            if track.is_valid_for_sim(sim_info):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def complete_milestone(self, aspiration, sim_info):
     if not _enabled() or getattr(aspiration, "aspiration_type", None) != AspriationType.FULL_ASPIRATION:
         return _original_complete(self, aspiration, sim_info)
     if not aspiration.is_valid_for_sim(sim_info):
         return
+    _, index = _load_tracks()
+    tracks = index.get(aspiration)
+    if not tracks or not _available_for(tracks, sim_info):
+        # Hidden/FTUE/utility or not selectable for this sim: normal EA completion only.
+        return _original_complete(self, aspiration, sim_info)
     # From here on this replaces EA's branch for aspiration levels (see the module docstring).
     EventDataTracker.complete_milestone(self, aspiration, sim_info)
     if aspiration.reward is not None:
@@ -174,8 +219,11 @@ def _after_level_complete(tracker, aspiration, sim_info, active_track, in_active
             _name(sim_info), aspiration.__name__, next_level.__name__ if next_level else "nothing - all done"))
     else:
         tracker._send_tracker_to_client()
+        # Utility/hidden aspirations (Utility_Introvert) belong to no track: say so instead
+        # of a bare "?" that reads like a lookup failure.
         asp_log.log("{}: completed {} early (aspiration {})".format(
-            _name(sim_info), aspiration.__name__, ", ".join(t.__name__ for t in tracks) or "?"))
+            _name(sim_info), aspiration.__name__,
+            ", ".join(t.__name__ for t in tracks) or "no track"))
 
 
 def _name(sim_info):

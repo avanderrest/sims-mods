@@ -1,4 +1,5 @@
-from asp_logic import ahead_of, all_complete, first_incomplete, index_tracks, tracks_to_finish
+from asp_logic import (ahead_of, all_complete, first_incomplete, index_tracks,
+                       track_is_selectable, tracks_to_finish)
 
 LEVELS = ["L1", "L2", "L3", "L4"]
 
@@ -24,6 +25,24 @@ def test_all_done():
     assert all_complete(LEVELS, done(*LEVELS))
     assert not all_complete(LEVELS, done("L1", "L2", "L4"))
     assert not all_complete([], done())
+
+
+class _Track:
+    def __init__(self, name="Track_Author", hidden=False, override_traits=()):
+        self.__name__ = name
+        self.is_hidden_unlockable = hidden
+        self.override_traits = override_traits
+
+
+def test_only_tracks_a_player_can_pick_are_selectable():
+    assert track_is_selectable(_Track())
+    assert not track_is_selectable(_Track(hidden=True))
+    # EA uses override_traits for the FTUE/tutorial tracks (Settling In, the tutorial's
+    # Style/Painter/Athlete/Culinary milestones).
+    assert not track_is_selectable(_Track(override_traits=("trait_FTUE",)))
+    assert track_is_selectable(_Track(override_traits=()))
+    assert not track_is_selectable(_Track(name="FTUE_Style"))
+    assert not track_is_selectable(_Track(name="FTUE_Athlete"))
 
 
 def test_index_and_finished_tracks():

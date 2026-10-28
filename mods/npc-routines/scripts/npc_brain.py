@@ -203,6 +203,10 @@ def clean_reason(reason):
         if index != -1:
             text = text[:index]
             lowered = text.lower()
+    # A small model sometimes keeps talking after the one sentence the prompt asked for
+    # ("...comfort\n\nThis decision is based on..."). Keep the first line: the rest went into
+    # the log and the notification, and a multiline reason breaks one-line log parsing.
+    text = text.split("\n", 1)[0].rstrip("\r")
     return text.strip(" ;:,-–—")
 
 

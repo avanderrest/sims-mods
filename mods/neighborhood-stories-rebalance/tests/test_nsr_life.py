@@ -37,6 +37,7 @@ from nsr_life import (
     should_start_child,
     should_start_romance,
     should_take_part_time,
+    sim_name,
     simple_compatibility,
     university_chance,
 )
@@ -276,6 +277,15 @@ def test_ea_pregnancy_gate_is_female_only_and_rare():
     assert not should_allow_ea_pregnancy(0.2, "FEMALE")
     assert not should_allow_ea_pregnancy(0.0, "MALE")
     assert not should_allow_ea_pregnancy(0.0, None)
+
+
+def test_sim_name_uses_the_parts_and_falls_back():
+    # SimInfo.full_name is "" in the game, which is why log lines had blank names.
+    assert sim_name("Grace", "Rest") == "Grace Rest"
+    assert sim_name("Grace", "") == "Grace"
+    assert sim_name("", "Rest") == "Rest"
+    assert sim_name("", "") == "sim"
+    assert sim_name(None, None, "household") == "household"
 
 
 def test_daily_romance_and_move_in_caps_are_small():

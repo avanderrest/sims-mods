@@ -86,6 +86,18 @@ def test_an_unchanged_file_is_not_re_read(monkeypatch, tmp_path):
     assert len(calls) == 1
 
 
+def test_saving_goals_writes_the_file_atomically(monkeypatch, tmp_path):
+    path = tmp_path / "npc_brain.json"
+    monkeypatch.setattr(npc_llm, "_PATH", str(path))
+    monkeypatch.setattr(npc_llm, "_data", {"sims": {}, "goals": {}})
+    monkeypatch.setattr(npc_llm, "_data_mtime", None)
+
+    npc_llm.set_goal(111, "become a painter")
+
+    assert json.loads(path.read_text(encoding="utf-8"))["goals"]["111"] == "become a painter"
+    assert not path.with_suffix(".json.tmp").exists()     # written atomically
+
+
 def test_a_broken_file_does_not_break_a_decision(monkeypatch, tmp_path):
     path = tmp_path / "npc_brain.json"
     path.write_text("{not json", encoding="utf-8")
