@@ -1,6 +1,7 @@
 import pytest
-from sg_logic import (CLUB_MEMBERS_REMOVED, admission_check, category_meaning, category_name,
-                      club_admission, group_affordances, in_wealth_range, is_friend,
+from sg_logic import (ACTIVITY_INTERESTS, BASE_GAME_TRAITS, admission_check, category_meaning,
+                      category_name, club_admission, club_exempt, group_affordances,
+                      in_wealth_range, interest_keys, interest_match, is_friend,
                       relative_wealth_label, relative_wealth_label_with_ranges, string_key,
                       wealth_bounds, wealth_description)
 
@@ -10,6 +11,49 @@ def test_is_friend():
     assert is_friend(80, 20)
     assert not is_friend(19, 20)
     assert not is_friend(None, 20)
+
+
+def test_club_exempts_family_household_and_friends():
+    assert not club_exempt()
+    assert club_exempt(close_relative=True)
+    assert club_exempt(same_household=True)
+    assert club_exempt(friend=True)
+    assert club_exempt(close_relative=False, same_household=True, friend=False)
+
+
+def test_every_activity_has_keywords_traits_and_a_like():
+    for key, info in ACTIVITY_INTERESTS.items():
+        assert info["keywords"], key
+        assert info["traits"], key
+        assert info["likes"] or info["like_prefixes"], key
+
+
+def test_every_base_game_trait_is_covered_somewhere():
+    covered = set()
+    for info in ACTIVITY_INTERESTS.values():
+        covered.update(info["traits"])
+    assert set(BASE_GAME_TRAITS) <= covered
+
+
+def test_interest_keys_read_activity_and_skill_tuning_names():
+    assert interest_keys(["clubInteractionGroup_SkillBuilding_Painting"]) == {"painting"}
+    assert "fitness" in interest_keys(["skill_Fitness"])
+    assert "comedy" in interest_keys(["clubInteractionGroup_Social_TellJokes"])
+    assert interest_keys([]) == set()
+
+
+def test_interest_match_uses_traits_and_likes():
+    ok, reason = interest_match({"painting"}, ["trait_Creative"])
+    assert ok and "painting" in reason
+    ok, _ = interest_match({"painting"}, ["trait_SimPreference_Likes_Activities_Painting"])
+    assert ok
+    ok, _ = interest_match({"painting"}, ["trait_Bookworm"])
+    assert not ok
+    # A Like from one category matches a club activity from the same interest.
+    ok, _ = interest_match({"listening_music"}, ["trait_SimPreference_Likes_Music_Pop"])
+    assert ok
+    # Unknown/empty activities never hide anyone.
+    assert interest_match(set(), ["trait_Bookworm"])[0]
 
 
 def test_wealth_bounds_relative_to_leader():
@@ -81,16 +125,6 @@ def test_every_label_is_shipped_in_the_string_table_source():
         assert ranged[0] in shipped
 
 
-def test_club_members_removed_notice_is_shipped_in_the_string_table_source():
-    from pathlib import Path
-
-    text_dir = Path(__file__).resolve().parents[1] / "text"
-    shipped = {line.strip() for source in text_dir.glob("*.txt")
-               for line in source.read_text(encoding="utf-8").splitlines()
-               if line.strip() and not line.startswith("#")}
-    assert CLUB_MEMBERS_REMOVED in shipped
-
-
 def test_string_key_matches_the_build_tool_hash():
     # tools/tuning.py hashes the same text this way when it writes the string table.
     assert string_key("Poorer than the club leader") == 0xCC353BC7
@@ -136,6 +170,14 @@ def test_admission_activity_skill_match():
     ok, reason = admission_check(set(), {"painting": 2}, (), (), ("painting",),
                                  activity_skill_min=1)
     assert ok and "activity" in reason
+
+
+def test_admission_interest_satisfies_the_restriction():
+    # A Sim who likes painting but has never painted still fits a painting club.
+    ok, reason = admission_check(set(), {}, (), (), ("painting",), interested=True)
+    assert ok and "interested" in reason
+    ok, _ = admission_check(set(), {}, (), (), ("painting",), interested=False)
+    assert not ok
 
 
 def test_admission_activity_can_match_any_skill():

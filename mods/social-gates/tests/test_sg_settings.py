@@ -6,6 +6,7 @@ def test_defaults():
     s = Settings()
     assert s.get("doors") is True
     assert s.get("club_wealth_band") == 0.5
+    assert s.get("club_interest") is True
 
 
 def test_set_switch_and_number():

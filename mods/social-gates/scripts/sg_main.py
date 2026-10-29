@@ -12,10 +12,15 @@ invites - SituationManager.create_situation for the invite-over situation, plus
 clubs   - Club.add_member and Club.can_sim_info_join: a new member must match a trait from
           the club's trait restrictions, a skill from its skill restrictions, or a skill
           used by one of its activities. EA's other membership criteria still apply.
+          The add-member picker hides Sims who would fail those checks, so they are never
+          offered in the first place. Outside the leader's circle (close relatives, household
+          members and friends) a Sim is also only offered when their traits or Likes match at
+          least one of the club's activities (sg_logic.ACTIVITY_INTERESTS). The leader's
+          close relatives, household and friends always bypass both checks.
           Club._validate_member_against_criteria ignores EA's fixed household-value brackets
-          for player-created clubs, so gaining money never kicks anyone; our relative check
-          runs when a Sim joins and when the club is edited. Existing members are
-          grandfathered on load.
+          for player-created clubs, so gaining money never kicks anyone. Editing a club no
+          longer removes anyone; existing members are grandfathered, and close relatives,
+          household members and friends are never removed even by EA's own event checks.
 
 Cheats:
   houserules.gates.status                - every setting
@@ -35,9 +40,9 @@ from server_commands.argument_helpers import OptionalSimInfoParam, get_optional_
 
 import sg_log
 import sg_state
-from sg_logic import (CLUB_MEMBERS_REMOVED, club_admission, group_affordances, in_wealth_range,
-                      is_friend, relative_wealth_label, relative_wealth_label_with_ranges,
-                      string_key, wealth_description)
+from sg_logic import (club_admission, club_exempt, group_affordances, in_wealth_range,
+                      interest_keys, interest_match, is_friend, relative_wealth_label,
+                      relative_wealth_label_with_ranges, string_key, wealth_description)
 from sg_settings import DEFAULT_SETTINGS
 
 # True while the game is loading saved clubs or re-validating members on its own. Used to
@@ -47,6 +52,10 @@ _sg_auto = False
 # True while the club rule screen is being built for a small business. Businesses still use
 # the game's fixed household-value brackets, so they keep the game's labels.
 _sg_business_ui = False
+
+# True while a club is being saved from the club screen. Editing a club must not remove
+# members, so criteria validation is skipped for the duration.
+_sg_editing_club = False
 
 
 @contextlib.contextmanager
@@ -140,17 +149,6 @@ def _leader_net_worth(club):
     return _net_worth(leader)
 
 
-def _club_label(club):
-    """The club's player-facing name. str(club) is its internal "name_id" form."""
-    try:
-        name = club.name
-        if name is not None:
-            return name
-    except Exception:
-        sg_log.log_exception("club name")
-    return str(club)
-
-
 def _friendship_score(a, b):
     """Friendship track score, or None when it can't be read. Household members count as friends."""
     if a is None or b is None:
@@ -176,6 +174,106 @@ def _is_friend(a, b):
     except Exception:
         threshold = 20
     return is_friend(_friendship_score(a, b), threshold)
+
+
+def _same_household(a, b):
+    try:
+        return a.household_id is not None and a.household_id == b.household_id
+    except Exception:
+        sg_log.log_exception("household check {} / {}".format(
+            sg_state.sim_name(a), sg_state.sim_name(b)))
+        return False
+
+
+def _is_close_relative(a, b):
+    """True when `b` is a parent, child or sibling of `a`."""
+    try:
+        return b.sim_id in set(a.genealogy.get_immediate_family_sim_ids_gen())
+    except Exception:
+        sg_log.log_exception("family check {} / {}".format(
+            sg_state.sim_name(a), sg_state.sim_name(b)))
+        return False
+
+
+def _club_exempt(member, club):
+    """The leader, close relatives, household members and friends of the leader."""
+    leader = getattr(club, "leader", None)
+    if leader is None or leader is member:
+        return True
+    return club_exempt(
+        close_relative=_is_close_relative(member, leader),
+        same_household=_same_household(member, leader),
+        friend=_is_friend(member, leader))
+
+
+def _activity_texts(club):
+    """Words from a club's activity tuning names and the skills those activities train."""
+    texts = []
+    for rule in getattr(club, "rules", ()):
+        group = getattr(rule, "action", None)
+        if group is None:
+            continue
+        texts.append(getattr(group, "__name__", "") or str(group))
+        try:
+            for affordance in group_affordances(group):
+                skill = _affordance_skill(affordance)
+                if skill is not None:
+                    texts.append(getattr(skill, "__name__", "") or str(skill))
+        except Exception:
+            sg_log.log_exception("reading activity " + str(group))
+    return texts
+
+
+# Club rules change rarely, and the picker asks once per candidate Sim.
+_interest_keys_cache = {}
+
+
+def _club_interest_keys(club):
+    try:
+        club_id = getattr(club, "id", None) or getattr(club, "club_id", None) or id(club)
+        if club_id not in _interest_keys_cache:
+            texts = _activity_texts(club)
+            keys = interest_keys(texts)
+            _interest_keys_cache[club_id] = keys
+            sg_log.log("club interest: {} rules {} -> activities {}".format(
+                str(club), len(getattr(club, "rules", ())), sorted(keys) or "none"))
+        return _interest_keys_cache[club_id]
+    except Exception:
+        sg_log.log_exception("club interest keys")
+        return set()
+
+
+def _trait_names(traits):
+    return {getattr(trait, "__name__", str(trait)) for trait in traits}
+
+
+def _interest_state(sim_info, club, trait_names=None):
+    """(allowed, matched, reason) for the interest filter.
+
+    `allowed` is what the picker enforces: exempt Sims and clubs whose activities we cannot
+    map are always allowed. `matched` is a real traits/Likes match, which also counts as a
+    way to satisfy a club's restrictions when joining.
+    """
+    if not _setting("club_interest"):
+        return True, False, "club interest filter is off"
+    if getattr(club, "leader", None) is sim_info:
+        return True, False, "the club leader"
+    if _club_exempt(sim_info, club):
+        return True, False, "family, household member or friend of the leader"
+    keys = _club_interest_keys(club)
+    if not keys:
+        if not getattr(club, "rules", ()):
+            return False, False, "the club has no activities to be interested in"
+        return True, False, "the club's activities are not mapped"
+    if trait_names is None:
+        trait_names = _trait_names(_sim_traits(sim_info))
+    ok, reason = interest_match(keys, trait_names)
+    return ok, ok, reason
+
+
+def _interest_result(sim_info, club):
+    allowed, _, reason = _interest_state(sim_info, club)
+    return allowed, reason
 
 
 # --- Sims, traits and skills -----------------------------------------------------------
@@ -293,14 +391,17 @@ def _admission_result(sim_info, club):
         # skills this club happens to name.
         skills.update(_all_skill_levels(sim_info))
     leader = getattr(club, "leader", None)
+    traits = _sim_traits(sim_info)
+    _, interested, _ = _interest_state(sim_info, club, _trait_names(traits))
     relative_wealth = bool(_setting("club_relative_wealth"))
     return club_admission(
-        _sim_traits(sim_info), skills,
+        traits, skills,
         wealth_categories=requirements["wealth"] if relative_wealth else (),
         candidate_net_worth=_net_worth(sim_info),
         leader_net_worth=_net_worth(leader),
         band=float(_setting("club_wealth_band")),
         relative_wealth=relative_wealth,
+        interested=interested,
         trait_requirements=requirements["traits"],
         skill_requirements=requirements["skills"],
         activity_skills=requirements["activity_skills"],
@@ -534,10 +635,16 @@ def _install_club_gates():
 
     def add_member(self, member, distribute=True):
         try:
-            if (member is not None and self.leader is not member and _club_gate_active(self)):
+            if (member is not None and self.leader is not member and _club_gate_active(self)
+                    and not _club_exempt(member, self)):
                 ok, reason = _admission_result(member, self)
                 if not ok:
                     sg_log.log("club: {} not admitted to {}: {}".format(
+                        sg_state.sim_name(member), str(self), reason))
+                    return False
+                ok, reason = _interest_result(member, self)
+                if not ok:
+                    sg_log.log("club: {} is not interested in {}: {}".format(
                         sg_state.sim_name(member), str(self), reason))
                     return False
         except Exception:
@@ -551,10 +658,15 @@ def _install_club_gates():
     def can_sim_info_join(self, new_sim_info):
         try:
             if (new_sim_info is not None and self.leader is not new_sim_info
-                    and _club_gate_active(self)):
+                    and _club_gate_active(self) and not _club_exempt(new_sim_info, self)):
                 ok, reason = _admission_result(new_sim_info, self)
                 if not ok:
                     sg_log.log("club: {} cannot join {}: {}".format(
+                        sg_state.sim_name(new_sim_info), str(self), reason))
+                    return False
+                ok, reason = _interest_result(new_sim_info, self)
+                if not ok:
+                    sg_log.log("club: {} is not interested in {}: {}".format(
                         sg_state.sim_name(new_sim_info), str(self), reason))
                     return False
         except Exception:
@@ -569,12 +681,14 @@ def _install_club_gates():
 
     def _validate_member_against_criteria(self, member, criteria, update_if_invalid=False):
         try:
+            if update_if_invalid and (_sg_editing_club or _club_exempt(member, self)):
+                return True
             if (_setting("club_relative_wealth")
                     and isinstance(criteria, ClubRuleCriteriaHouseholdValue)
                     and (getattr(self, "club_seed", None) is None or _setting("club_enforce_premade"))):
                 return True
         except Exception:
-            sg_log.log_exception("club wealth validation skip")
+            sg_log.log_exception("club validation skip")
         return original_validate_criteria(self, member, criteria, update_if_invalid)
 
     Club._validate_member_against_criteria = _validate_member_against_criteria
@@ -622,34 +736,59 @@ def _install_club_gates():
     original_update = ClubService.update_club_from_data
 
     def update_club_from_data(self, club_data):
-        result = original_update(self, club_data)
+        global _sg_editing_club
+        old = _sg_editing_club
+        _sg_editing_club = True
         try:
-            if _setting("clubs") and _setting("club_enforce_on_edit"):
-                club = self.get_club_by_id(club_data.club_id)
-                if (club is not None and club.leader is not None
-                        and (getattr(club, "club_seed", None) is None or _setting("club_enforce_premade"))):
-                    removed = []
-                    for member in tuple(club.members):
-                        if member is club.leader:
-                            continue
-                        ok, reason = _admission_result(member, club)
-                        if not ok:
-                            removed.append((sg_state.sim_name(member), reason))
-                            club.remove_member(member)
-                    if removed:
-                        sg_log.log("club edit: {} removed {}".format(str(club), removed))
-                        sg_state.notify(
-                            "Club members removed",
-                            _localized_string(
-                                CLUB_MEMBERS_REMOVED, _club_label(club),
-                                "; ".join("{} ({})".format(name, reason)
-                                          for name, reason in removed[:3])),
-                            services.active_sim_info())
-        except Exception:
-            sg_log.log_exception("club edit re-check")
-        return result
+            return original_update(self, club_data)
+        finally:
+            _sg_editing_club = old
+            _interest_keys_cache.clear()
 
     ClubService.update_club_from_data = update_club_from_data
+
+
+def _install_club_picker_filter():
+    """Hide Sims who would fail the club's checks from the add-member picker.
+
+    EA builds the picker rows server-side and only tests the club's own criteria. Our extra
+    admission rule cannot be expressed as a criterion, so rows are dropped here. A Sim who
+    could not actually join, or would not enjoy any of the club's activities (and is not a
+    close relative, household member or friend of the leader), is never offered for adding.
+    """
+    from clubs.club_sim_picker_dialog import UiClubSimPicker
+
+    original_add_row = UiClubSimPicker.add_row
+
+    def add_row(self, row):
+        try:
+            sim_id = getattr(row, "sim_id", None)
+            if sim_id is not None and _setting("clubs"):
+                sim_info = services.sim_info_manager().get(sim_id)
+                club = _editing_club()
+                if sim_info is not None and club is not None and _club_gate_active(club):
+                    if _club_exempt(sim_info, club):
+                        sg_log.log("club picker: showing {} for {}: exempt".format(
+                            sg_state.sim_name(sim_info), str(club)))
+                    else:
+                        ok, reason = _admission_result(sim_info, club)
+                        if not ok:
+                            sg_log.log("club picker: hiding {} from {}: {}".format(
+                                sg_state.sim_name(sim_info), str(club), reason))
+                            return
+                        allowed, _, reason = _interest_state(sim_info, club)
+                        if not allowed:
+                            sg_log.log("club picker: hiding {} from {}: {}".format(
+                                sg_state.sim_name(sim_info), str(club), reason))
+                            return
+                        sg_log.log("club picker: showing {} for {}: {}".format(
+                            sg_state.sim_name(sim_info), str(club), reason))
+        except Exception:
+            sg_log.log_exception("club add-member picker filter")
+        return original_add_row(self, row)
+
+    UiClubSimPicker.add_row = add_row
+    sg_log.log("club picker: ineligible or uninterested sims are hidden from the add list")
 
 
 # --- Cheats ----------------------------------------------------------------------------
@@ -714,11 +853,14 @@ def gates_check(opt_sim: OptionalSimInfoParam = None, _connection=None):
     for club in clubs:
         reqs = _club_requirements(club)
         ok, reason = _admission_result(sim_info, club)
+        interest_ok, interest_reason = _interest_result(sim_info, club)
         member = sim_info in club.members
         output("{}: {}{} - {}".format(
             str(club), "member" if member else "not a member",
             " (leader)" if club.leader is sim_info else "",
             "passes" if ok else "FAILS") + ": " + reason)
+        output("  interest: {} ({})".format(
+            "yes" if interest_ok else "no", interest_reason))
         output("  traits {} / skills {} / wealth {} / activity skills {}".format(
             len(reqs["traits"]), len(reqs["skills"]), len(reqs["wealth"]),
             len(reqs["activity_skills"]) + (1 if reqs["activity_any"] else 0)))
@@ -892,6 +1034,10 @@ def _install():
         _install_club_gates()
     except Exception:
         sg_log.log_exception("installing club gates")
+    try:
+        _install_club_picker_filter()
+    except Exception:
+        sg_log.log_exception("installing club picker filter")
     try:
         _install_club_labels()
     except Exception:

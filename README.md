@@ -249,7 +249,16 @@ Makes social access mean something, without adding clicks:
 - **Invite over means something.** A sim declines your invite unless you're friends.
 - **Clubs only accept sims who fit.** A sim must match at least one of the club's trait
   restrictions, skill restrictions, or the skills its activities train. The club leader is
-  exempt, and premade clubs are left alone by default.
+  exempt, and premade clubs are left alone by default. Sims who don't fit are hidden from
+  the add-member picker, so they are never offered for adding in the first place.
+- **Only sims who would enjoy the club are offered.** Outside the leader's close relatives,
+  household and friends, the add-member picker also checks the sim's traits and Likes. A
+  painting club shows sims who like painting or are Creative/Art Lovers/Perfectionists, a
+  fitness club shows Active/Gym Rat sims, and so on. Liking an activity also counts as
+  fitting the club, so a sim who likes painting can join a painting club before learning the
+  skill. The leader's close relatives, household and friends are always shown and can always
+  be added. Every base-game trait belongs to at least one activity, and each activity has its
+  own Like preference.
 - **Club wealth is relative.** The game's fixed `Poor` / `Average` / `Rich` household-value
   brackets become **poorer than**, **similar to**, or **richer than the club leader**. By
   default "similar" means between half and 1.5× the leader's household net worth. The leader
@@ -265,9 +274,13 @@ Makes social access mean something, without adding clicks:
   (marriage, aging, career changes, earning simoleons, leaving build/buy); Social Gates
   suppresses only the household-value part for player clubs, so a funds change cannot remove
   a member. The other criteria still apply — for example, marrying out of a club with a
-  "not in a relationship" rule still removes the member. Wealth is re-checked when the club
-  is edited. Game-owned clubs keep EA's fixed-bracket event checks unless
-  `club_enforce_premade` is on.
+  "not in a relationship" rule still removes the member. Game-owned clubs keep EA's
+  fixed-bracket event checks unless `club_enforce_premade` is on.
+- **Editing a club never kicks anyone out.** Changing a club's rules leaves its current
+  members alone; anyone who no longer fits simply stops being offered in the add-member
+  picker. Close relatives (parents, children, siblings, step-family), household members,
+  and anyone the leader is friends with are also never removed by the game's own event
+  checks.
 
 Settings are saved in `Mods\HouseRules\data\social_gates.json`.
 
@@ -280,7 +293,7 @@ houserules.gates.wealth                 effective Poor/Average/Rich ranges per c
 ```
 
 Settings: `doors`, `invites`, `clubs`, `club_require_restriction`, `club_relative_wealth`,
-`club_wealth_band`, `club_activity_skill_min`, `club_enforce_premade`, `club_enforce_on_edit`,
+`club_wealth_band`, `club_activity_skill_min`, `club_enforce_premade`, `club_interest`,
 `friend_min_score`.
 
 ## Flexible University
