@@ -24,8 +24,15 @@ tuning, so it cannot be filled from a script; instead the nine requirement aspir
 attached to the Noble career levels are overridden (tuning/NobleAspiration_*.xml,
 tuning/NobleSavings_*.xml and tuning/NobleFriend_*.xml) to show the same two requirements.
 Those rows are display only: the game cannot test net worth, a friend's noble rank or a
-vacant throne from a career objective, so nothing ticks in the panel. The script gate below
-is the authority.
+vacant throne from a career objective, so they never complete on their own. The values are
+pushed to the panel (money prints as "§current / §goal", not the default 0/1); the script
+gate below is the authority.
+
+The check is live, never cached: every promotion attempt re-reads net worth, the friend and
+the throne. In addition, the active household's nobles are re-checked each day just before
+the career hands out the day's duties (a wrapper on clear_and_request_assignments), which
+refreshes the panel rows whether or not a promotion is attempted. Promotion itself still
+happens on the game's end-of-day performance path.
 
 Cheats:
   houserules.royalty.status              this Sim, its rank and the next gate
@@ -410,6 +417,62 @@ else:
     _promote = _no_gate
 
 
+# --- Daily check, before the day's duties ------------------------------------------------
+_ASSIGNMENTS_ATTR = "_ascent_to_royalty_original_assignments"
+
+
+def _in_active_household(sim_info):
+    """Only the household the player is playing is re-checked every day."""
+    try:
+        household = services.active_household()
+        return household is not None and getattr(sim_info, "household", None) is household
+    except Exception:
+        return False
+
+
+def _daily_check(sim_info):
+    """Re-read the gate and refresh the panel before the career hands out duties.
+
+    Nothing is cached. Net worth, the outside-dynasty friend and a vacant throne are read
+    again, so a row met yesterday unticks if the money was spent or the friend is gone.
+    Promotion stays on the game's end-of-day performance path; this only makes sure the
+    player sees an up-to-date check each day even when no promotion is attempted.
+    """
+    career = _noble_career(sim_info)
+    if career is None:
+        return
+    _push_panel_status(sim_info)
+    max_level = _max_level(career)
+    level = _level(career)
+    if level >= max_level:
+        atr_log.log("daily check {}: already holds the crown".format(_name(sim_info)))
+        return
+    target = min(max_level, level + 1)
+    found, _ = _failures(sim_info, career, target)
+    atr_log.log("daily check {} -> level {}: {}".format(
+        _name(sim_info), target,
+        "missing " + failure_text(found) if found else "ready"))
+
+
+def _wrap_assignments():
+    """Run the check just before clear_and_request_assignments() gives the day's duties."""
+    current = NobleCareer.clear_and_request_assignments
+    if getattr(current, _ASSIGNMENTS_ATTR, None) is not None:
+        return   # already wrapped (module reloaded)
+
+    def clear_and_request_assignments(self, *args, **kwargs):
+        try:
+            if _ACTIVE and not _bypass and _in_active_household(self.sim_info):
+                _daily_check(self.sim_info)
+        except Exception:
+            atr_log.log_exception("daily noble check before duties")
+        return current(self, *args, **kwargs)
+
+    setattr(clear_and_request_assignments, _ASSIGNMENTS_ATTR, current)
+    NobleCareer.clear_and_request_assignments = clear_and_request_assignments
+    atr_log.log("daily noble check armed before duty handout")
+
+
 # --- Inviting fellow nobles ------------------------------------------------------------
 _INVITE_AFFORDANCE_ID = 16404971447273659384   # fnv64(name) with the high bit set
 _INVITE_GUESTS = 3   # a gathering: two or three people, not an empty hall
@@ -611,6 +674,7 @@ def _wrap_zone_load():
         result = original(self, *args, **kwargs)
         try:
             _install_throne_affordance()
+            _log_panel_tuning()
             active = services.active_sim_info()
             if active is not None:
                 _push_panel_status(active)
@@ -625,6 +689,34 @@ def _wrap_zone_load():
 
 # --- Career panel status ---------------------------------------------------------------
 _PANEL_SAVINGS = re.compile(r"HouseRules_NobleSavings_Level(\d+)$")
+
+
+def _panel_row(sim_info, objective, career=None):
+    """The value the panel should show for one of our rows, or None for EA's own rows.
+
+    Returns (current, goal, is_money, show_progress). The career is looked up only for our
+    rows, so the game's own objectives are untouched.
+    """
+    name = str(getattr(objective, "__name__", ""))
+    match = _PANEL_SAVINGS.match(name)
+    is_ours = name.startswith("HouseRules_Noble")
+    if match is None and not is_ours:
+        return None
+    if career is None:
+        career = _noble_career(sim_info)
+    if match is not None:
+        if career is None:
+            return None
+        rank = rank_for_level(int(match.group(1)), _max_level(career))
+        return (min(int(_net_worth(sim_info)), int(rank.net_worth)), int(rank.net_worth),
+                True, True)
+    if name.startswith("HouseRules_NobleFriend"):
+        return (1 if _dynasty_friend(sim_info) else 0), 1, False, False
+    if name.startswith("HouseRules_NobleMonarch"):
+        if career is None:
+            return None
+        return (1 if _throne_empty(sim_info, career) else 0), 1, False, False
+    return None
 
 
 def _push_panel_status(sim_info):
@@ -642,39 +734,115 @@ def _push_panel_status(sim_info):
     tracker = getattr(sim_info, "aspiration_tracker", None)
     aspiration = getattr(career.current_level_tuning, "aspiration", None)
     if tracker is None or aspiration is None:
+        atr_log.log("panel status not pushed for {}: {} aspiration, {} tracker".format(
+            _name(sim_info), "no" if aspiration is None else "found",
+            "no" if tracker is None else "found"))
         return 0
-    max_level = _max_level(career)
-    net_worth = _net_worth(sim_info)
-    friend = _dynasty_friend(sim_info)
-    throne = _throne_empty(sim_info, career)
     pushed = 0
+    rows = []
     for objective in getattr(aspiration, "objectives", ()) or ():
-        name = str(getattr(objective, "__name__", ""))
-        goal = None
-        current, is_money, progress = 0, False, False
-        match = _PANEL_SAVINGS.match(name)
-        if match:
-            rank = rank_for_level(int(match.group(1)), max_level)
-            goal, current, is_money, progress = rank.net_worth, net_worth, True, True
-        elif name.startswith("HouseRules_NobleFriend"):
-            goal, current = 1, (1 if friend else 0)
-        elif name.startswith("HouseRules_NobleMonarch"):
-            goal, current = 1, (1 if throne else 0)
-        if goal is None:
+        values = _panel_row(sim_info, objective, career)
+        if values is None:
             continue   # EA's own rows (Charisma) are the game's business
+        current, goal, is_money, progress = values
         try:
-            tracker.update_objective(objective, min(int(current), int(goal)), int(goal),
-                                     is_money, progress)
+            # from_init=True is what makes the tracker send these values. EA's own
+            # force_send_objective_update() does the same; without it the dirty rows are
+            # dropped and the panel keeps its default 0/1.
+            tracker.update_objective(objective, current, goal, is_money, progress,
+                                     from_init=True)
+            rows.append("{}={}/{}".format(
+                getattr(objective, "__name__", objective), current, goal))
             pushed += 1
         except Exception:
-            atr_log.log_exception("pushing panel status for {}".format(name))
+            atr_log.log_exception("pushing panel status for {}".format(
+                getattr(objective, "__name__", objective)))
     if pushed:
         try:
             tracker.send_if_dirty()
         except Exception:
             atr_log.log_exception("sending panel status")
-        atr_log.log("panel status pushed for {}: {} row(s)".format(_name(sim_info), pushed))
+        atr_log.log("panel status pushed for {}: {}".format(
+            _name(sim_info), ", ".join(rows)))
     return pushed
+
+
+# --- Keep the panel rows right when the game refreshes them -----------------------------
+# EA sends the requirement rows itself on selection and load: CareerTracker.
+# activate_career_aspirations() runs when the Sim is instantiated, and
+# AspirationTracker.update_objective() is the single funnel for every goal value the
+# client receives. Substituting our values there means no refresh can put the panel back
+# to its default 0/1, whichever path triggered it.
+_UPDATE_OBJECTIVE_ATTR = "_ascent_to_royalty_original_update_objective"
+_CAREER_ACTIVATION_ATTR = "_ascent_to_royalty_original_activate_career_aspirations"
+_CAREER_RESEND_ATTR = "_ascent_to_royalty_original_resend_career_data"
+
+
+def _wrap_objective_updates():
+    from aspirations.aspirations import AspirationTracker
+    current = AspirationTracker.update_objective
+    if getattr(current, _UPDATE_OBJECTIVE_ATTR, None) is not None:
+        return   # already wrapped (module reloaded)
+
+    def update_objective(self, objective, current_value, objective_value, is_money,
+                         show_progress, *args, **kwargs):
+        try:
+            sim_info = getattr(self, "owner_sim_info", None)
+            if sim_info is not None:
+                values = _panel_row(sim_info, objective)
+                if values is not None:
+                    current_value, objective_value, is_money, show_progress = values
+        except Exception:
+            atr_log.log_exception("panel row values")
+        return current(self, objective, current_value, objective_value, is_money,
+                       show_progress, *args, **kwargs)
+
+    setattr(update_objective, _UPDATE_OBJECTIVE_ATTR, current)
+    AspirationTracker.update_objective = update_objective
+    atr_log.log("panel row values hooked")
+
+
+def _wrap_career_activation():
+    from careers.career_tracker import CareerTracker
+    current = CareerTracker.activate_career_aspirations
+    if getattr(current, _CAREER_ACTIVATION_ATTR, None) is not None:
+        return
+
+    def activate_career_aspirations(self, *args, **kwargs):
+        result = current(self, *args, **kwargs)
+        try:
+            sim_info = getattr(self, "_sim_info", None)
+            if sim_info is not None:
+                _push_panel_status(sim_info)
+        except Exception:
+            atr_log.log_exception("pushing panel status after career activation")
+        return result
+
+    setattr(activate_career_aspirations, _CAREER_ACTIVATION_ATTR, current)
+    CareerTracker.activate_career_aspirations = activate_career_aspirations
+    atr_log.log("panel status pushed after career activation")
+
+
+def _wrap_career_resend():
+    """The career panel asks for this when it opens (and on selection)."""
+    from careers.career_tracker import CareerTracker
+    current = CareerTracker.resend_career_data
+    if getattr(current, _CAREER_RESEND_ATTR, None) is not None:
+        return
+
+    def resend_career_data(self, *args, **kwargs):
+        result = current(self, *args, **kwargs)
+        try:
+            sim_info = getattr(self, "_sim_info", None)
+            if sim_info is not None:
+                _push_panel_status(sim_info)
+        except Exception:
+            atr_log.log_exception("pushing panel status after resending career data")
+        return result
+
+    setattr(resend_career_data, _CAREER_RESEND_ATTR, current)
+    CareerTracker.resend_career_data = resend_career_data
+    atr_log.log("panel status pushed after career resend")
 
 
 # --- Reporting and cheats --------------------------------------------------------------
@@ -1060,6 +1228,22 @@ def royalty_reset(_connection=None):
 
 if _ACTIVE:
     try:
+        _wrap_objective_updates()
+    except Exception:
+        atr_log.log_exception("hooking panel row values")
+    try:
+        _wrap_career_activation()
+    except Exception:
+        atr_log.log_exception("hooking career activation")
+    try:
+        _wrap_career_resend()
+    except Exception:
+        atr_log.log_exception("hooking career resend")
+    try:
+        _wrap_assignments()
+    except Exception:
+        atr_log.log_exception("arming the daily noble check")
+    try:
         _wrap_zone_load()
     except Exception:
         atr_log.log_exception("arming the throne patch")
@@ -1073,11 +1257,15 @@ atr_log.log("ascent_to_royalty loaded: {}".format("active" if _ACTIVE else "inac
 # that ignores XML tuning is visible in the log rather than only as a missing row.
 _NOBLE_ASPIRATION_LEVEL1 = 0x71D83
 _NOBLE_NET_WORTH_LEVEL1 = 2130706433
+_panel_tuning_logged = False
 
 
 def _log_panel_tuning():
-    if not _ACTIVE:
+    """Log once, after a save has loaded: at script load the managers are still filling."""
+    global _panel_tuning_logged
+    if not _ACTIVE or _panel_tuning_logged:
         return
+    _panel_tuning_logged = True
     try:
         from sims4.resources import Types
 
@@ -1096,6 +1284,3 @@ def _log_panel_tuning():
             "missing" if objective is None else "found"))
     except Exception:
         atr_log.log_exception("checking the career-panel tuning")
-
-
-_log_panel_tuning()

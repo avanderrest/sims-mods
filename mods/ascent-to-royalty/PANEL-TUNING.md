@@ -40,16 +40,30 @@ the rows themselves (text and tooltip).
 Adding a tuning class to this path means adding it to `SIMDATA_GROUPS` in `tools/tuning.py`
 together with the schema the game has registered for it.
 
-## The rows do not tick
+## The rows do not tick, but they show values
 
 The game stores an objective's presentation in the per-tuning SimData and its test
 (`objective_test`, `objective_completion_type`, `completion_loot`) in the pack's *combined*
 tuning resource (`0x62E94D38`). No package in the game — EA's or any mod's — carries an
 objective test in a per-tuning SimData, and a hand-made one is not something to guess at.
 
-So the panel rows are reminders: net worth, the dynastic friend and the vacant throne are all
+So the rows are reminders: net worth, the dynastic friend and the vacant throne are all
 shown, and none of them can ever complete. `houserules.royalty.requirements` is the authority
 on what is actually met.
+
+The script pushes the current values before the day's duties and on zone load, so the panel
+does not sit at its default `0/1`. Money rows print `§current / §goal` (for example
+`§10,000 / §35,000`); the friend and throne rows show no count. `houserules.royalty.panel`
+re-pushes them on demand.
+
+EA re-sends the rows itself on load and when a Sim is selected, so pushing once is not
+enough: `CareerTracker.activate_career_aspirations` and `AspirationTracker.update_objective`
+are wrapped. The latter is the single funnel for every goal value the client receives, so
+any refresh gets our values instead of `objective.goal_value()`'s default of 1.
+
+The push goes through `AspirationTracker.update_objective` with `from_init=True` — EA's own
+`force_send_objective_update` does the same. Without that flag the tracker drops the dirty
+rows and the panel keeps the default `0/1`.
 
 `aspiration_nobleCareer_Level1` keeps EA's Charisma objective alongside ours; if the panel
 shows only Charisma, the aspiration override did not load.
