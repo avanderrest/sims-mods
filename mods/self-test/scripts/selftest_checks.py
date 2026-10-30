@@ -111,19 +111,18 @@ def _hello_module(_context):
 # ======================================================================================
 # Hard Mode
 # ======================================================================================
-hardmode = REGISTRY.suite("hardmode", "Hard Mode: careers, money, skills, life, debt")
+hardmode = REGISTRY.suite("hardmode", "Hard Mode: careers, money, debt")
 
 
 @hardmode.check("modules loaded")
 def _hard_modules(_context):
-    live.require_modules("hardmode_main", "hardmode_money_main", "hardmode_skills_main", "hardmode_life_main")
-    return "4 game modules"
+    live.require_modules("hardmode_main", "hardmode_money_main")
+    return "2 game modules"
 
 
 @hardmode.check("hooks installed")
 def _hard_hooks(_context):
-    markers = ("careers.select hook installed", "firing hooks installed", "money hooks installed",
-               "skill aptitude hooks installed", "life hooks installed")
+    markers = ("careers.select hook installed", "money hooks installed")
     missing = [marker for marker in markers if not live.logged_any_session("hard-mode", marker)]
     if missing:
         raise CheckFailed("not logged: {} (see {})".format(", ".join(missing), live.log_path("hard-mode")))
@@ -138,7 +137,7 @@ def _hard_settings(_context):
     missing = [key for key in settings_module.DEFAULT_SETTINGS if key not in settings.values]
     if missing:
         raise CheckFailed("settings missing: {}".format(", ".join(missing)))
-    return "{} settings, start_funds {}".format(len(settings.values), settings.get("start_funds"))
+    return "{} settings".format(len(settings.values))
 
 
 @hardmode.check("career gate logic")
@@ -258,80 +257,6 @@ def _hard_phone(_context):
     money = live.require_module("hardmode_money_main")
     affordance = live.require_tuning("INTERACTION", money.PAY_DEBT_AFFORDANCE_ID, "Pay Off Debt")
     return getattr(affordance, "__name__", "interaction") + " (package installed)"
-
-
-@hardmode.check("skill aptitude hooks")
-def _hard_skill_hooks(_context):
-    from statistics.skill import Skill
-
-    skills_main = live.require_module("hardmode_skills_main")
-    skills = live.import_optional("hardmode_skills")
-    if Skill.get_statistic_multiplier_increase is not skills_main.get_statistic_multiplier_increase:
-        raise CheckFailed("Skill.get_statistic_multiplier_increase is not wrapped")
-    sim_info = live.require_sim()
-    talents = skills.talents_for(sim_info.sim_id)
-    _assert(len(talents) == skills.TALENT_COUNT, "expected {} talents, got {}".format(skills.TALENT_COUNT, talents))
-    _assert(skills.aptitude_multiplier(talents[0], 0, sim_info.sim_id, ()) == skills.APT_MULTIPLIER,
-            "a talent does not get the aptitude multiplier")
-    return "{} talents for {}".format(", ".join(talents), live.sim_name(sim_info))
-
-
-@hardmode.check("skill factor on a real skill")
-def _hard_skill_factor(_context):
-    skills_main = live.require_module("hardmode_skills_main")
-    sim_info = live.require_sim()
-    skill_type = live.find_skill("Logic")
-    if skill_type is None:
-        raise CheckFailed("Logic skill not found in this game")
-    skill = sim_info.get_statistic(skill_type, add=False)
-    added = skill is None
-    if added:
-        # Set one up so the check runs on every save instead of skipping.
-        skill = sim_info.get_statistic(skill_type, add=True)
-    if skill is None:
-        raise CheckFailed("could not add a Logic skill instance")
-    try:
-        factor = skills_main._factor(skill)
-        _assert(isinstance(factor, float) and factor > 0, "factor was {!r}".format(factor))
-        return "Logic {} -> x{:.2f}".format(skill.get_user_value(), factor)
-    finally:
-        if added:
-            try:
-                sim_info.remove_statistic(skill_type)
-            except Exception:
-                pass
-
-
-@hardmode.check("life logic")
-def _hard_life_logic(_context):
-    life = live.import_optional("hardmode_life")
-    _assert(life.reward_cost(1000) == 1500, "reward_cost(1000) was {}".format(life.reward_cost(1000)))
-    _assert(life.childcare_cost(2, 2, 2, 2) == 120, "childcare_cost(2,2,2,weekday) was {}".format(
-        life.childcare_cost(2, 2, 2, 2)))
-    _assert(life.relationship_decay(1.0, "Friendship") == 1.5, "friendship decay was not 1.5x")
-    _assert(life.lingers("Mood_Sad", 2), "a strong sad mood does not linger")
-    return "reward store x1.5, childcare, decay and moods"
-
-
-@hardmode.check("reward store prices raised")
-def _hard_store(_context):
-    settings = live.require_module("hardmode_state").ensure_settings()
-    if not settings.get("life"):
-        raise SkipCheck("Hard Mode's life setting is off")
-    life_main = live.require_module("hardmode_life_main")
-    if life_main._original_store is None:
-        raise CheckFailed("the reward store prices were not raised at zone load")
-    from satisfaction.satisfaction_tracker import SatisfactionTracker
-    changed = SatisfactionTracker.SATISFACTION_STORE_ITEMS
-    life = live.import_optional("hardmode_life")
-    checked = 0
-    for reward, data in list(life_main._original_store.items())[:300]:
-        new = changed.get(reward)
-        if new is None or int(new.cost) != life.reward_cost(int(data.cost)):
-            raise CheckFailed("{} costs {!r}, expected {}".format(
-                getattr(reward, "__name__", reward), getattr(new, "cost", None), life.reward_cost(int(data.cost))))
-        checked += 1
-    return "{} items at x1.5".format(checked)
 
 
 # ======================================================================================
@@ -1394,10 +1319,13 @@ def _royalty_logic(_context):
     logic = live.import_optional("atr_logic")
     _assert(logic.rank_for_level(0, 9).male == "Knight", "level 0 is not the Knight rung")
     _assert(logic.rank_for_level(9, 9).male == "Monarch", "the top level is not the Monarch rung")
-    _assert(logic.missing(9, 9, 0, 0, 0, ()), "an empty dynasty passed the crown gate")
-    _assert(logic.missing(6, 9, 0, 0, 0, (), inherited=True) == [],
-            "inherited peerage was gated")
-    return "rank ladder, crown gate and inherited-peerage bypass"
+    _assert(logic.missing(1, 9, current_level=0, net_worth=0, friend_rank=-1),
+            "a penniless, friendless Knight passed the gate")
+    _assert(logic.missing(9, 9, current_level=8, net_worth=0, friend_rank=-1,
+                          throne_empty=False), "the crown gate passed with another Monarch present")
+    _assert(logic.missing(6, 9, current_level=5, net_worth=0, friend_rank=-1,
+                          inherited=True) == [], "inherited peerage was gated")
+    return "rank ladder, net worth/friendship gate, monarchy-only crown and inherited bypass"
 
 
 @royalty.check("reads the selected sim")

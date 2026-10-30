@@ -1,5 +1,6 @@
 {
   "name": "Rags to Riches",
+  "menu": {"category": "Challenge", "difficulty": "HARD"},
   "description": "Start with nothing and no job. Paint your way to a fortune and a proper home.",
   "start": {
     "money": 0,

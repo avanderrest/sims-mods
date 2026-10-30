@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The only requirement from Grand Duke to Monarch. Informational; the script reads the throne. -->
+<I c="Objective" i="objective" m="event_testing.objective_tuning" n="HouseRules_NobleMonarch" s="2130706465">
+  <T n="display_text">{{string:No Monarch in the region}}</T>
+  <T n="tooltip">{{string:Ascent to Royalty requires the region to have no Monarch before the claim.}}</T>
+</I>

@@ -429,6 +429,7 @@ def _patched_on_loading_screen_animation_finished(self, *args, **kwargs):
         _note_zone_load(self)
     except Exception:
         scenario_log.log_exception("zone load: travel check")
+    _log_menu_tuning()
     return result
 
 
@@ -553,6 +554,62 @@ def scenario_start(name: str = None, _connection=None):
     except Exception:
         scenario_log.log_exception("scenario.start")
         output("Failed - see the log.")
+
+
+def _menu_tuning_lines():
+    """What the game makes of the exported menu tuning, as lines to print or log.
+
+    The Scenarios screen is client-side, so this is the server's view: if the Scenario
+    instance is missing here, the package never loaded and no UI change can help.
+    """
+    lines = []
+    try:
+        from sims4.resources import Types
+        manager = services.get_instance_manager(Types.SNIPPET)
+    except Exception as error:
+        return ["Snippet manager unavailable: {}".format(error)]
+    found = []
+    for cls in manager.types.values():
+        if str(getattr(cls, "__name__", "")).startswith("HouseRules_Scenario"):
+            found.append(cls)
+    if not found:
+        return ["No HouseRules_Scenario snippet loaded: the package or its tuning is rejected."]
+    for cls in found:
+        goals = getattr(cls, "goals", ()) or ()
+        lines.append("{}: {} goal(s), entry method {}".format(
+            cls.__name__, len(goals),
+            getattr(cls, "compatibility_with_scenario_entry_method", "?")))
+        for goal in goals:
+            situation_goal = getattr(goal, "situation_goal", None)
+            lines.append("   goal: situation_goal {}".format(
+                "loaded" if situation_goal is not None else "MISSING"))
+            if situation_goal is not None:
+                try:
+                    test = getattr(situation_goal, "_goal_test", None)
+                    lines.append("      test: {}".format("ok" if test is not None else "none"))
+                except Exception as error:
+                    lines.append("      test error: {}".format(error))
+    return lines
+
+
+def _log_menu_tuning():
+    try:
+        for line in _menu_tuning_lines():
+            scenario_log.log("tuning: " + line)
+    except Exception:
+        scenario_log.log_exception("checking the menu tuning")
+
+
+@sims4.commands.Command("houserules.scenario.tuning", command_type=sims4.commands.CommandType.Live)
+def scenario_tuning(_connection=None):
+    """Prints and logs what the game made of the exported menu tuning."""
+    output = sims4.commands.CheatOutput(_connection)
+    for line in _menu_tuning_lines():
+        output(line)
+        try:
+            scenario_log.log("tuning: " + line)
+        except Exception:
+            pass
 
 
 @sims4.commands.Command("houserules.scenario.status", command_type=sims4.commands.CommandType.Live)

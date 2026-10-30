@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, urlparse
 
 import config
 import scenario_export
+import scenario_icons
 from scenario_export import SCENARIO_DIR, slugify, validate
 
 HERE = Path(__file__).resolve().parent
@@ -83,6 +84,10 @@ def meta():
         "relationships": list(logic.RELATIONSHIP_LEVELS),
         "rule_types": list(logic.RULE_TYPES),
         "penalty_types": list(logic.PENALTY_TYPES),
+        # Names and keys only: the picker never ships EA's images.
+        "icons": [{"name": icon["name"], "path": icon["path"]}
+                  for icon in scenario_icons.ICONS],
+        "default_icon": scenario_icons.DEFAULT_NAME,
     }
 
 

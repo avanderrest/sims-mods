@@ -64,8 +64,15 @@ def validate(data):
     errors, warnings = [], []
     if not isinstance(data, dict):
         raise ScenarioError("the file must be one JSON object {...}")
-    if not data.get("name"):
+
+    name = data.get("name")
+    if name in (None, ""):
         errors.append("missing \"name\"")
+    elif not isinstance(name, str):
+        errors.append("\"name\" must be text")
+    description = data.get("description")
+    if description is not None and not isinstance(description, str):
+        errors.append("\"description\" must be text")
 
     start = data.get("start", {})
     if not isinstance(start, dict):
@@ -77,8 +84,11 @@ def validate(data):
     money = start.get("money")
     if money is not None and not _is_number(money) and not (isinstance(money, dict) and _is_number(money.get("add"))):
         errors.append("start.money must be a number or {\"add\": number}")
-    for key in ("traits", "remove_traits", "skills"):
-        _check_who_map(start.get(key), "start." + key, errors)
+    if "remove_careers" in start and not isinstance(start["remove_careers"], bool):
+        errors.append("start.remove_careers must be true or false")
+    for key in ("traits", "remove_traits"):
+        _check_who_map(start.get(key), "start." + key, errors, "list")
+    _check_who_map(start.get("skills"), "start.skills", errors, "map")
 
     goals = data.get("goals")
     if not isinstance(goals, list) or not goals:
@@ -86,34 +96,54 @@ def validate(data):
         goals = []
     ids = set()
     for i, goal in enumerate(goals):
-        where = "goal {}".format(goal.get("id") if isinstance(goal, dict) and goal.get("id") else i + 1)
         if not isinstance(goal, dict):
-            errors.append("{}: must be an object".format(where))
+            errors.append("goal {}: must be an object".format(i + 1))
             continue
         gid = goal.get("id")
-        if not gid:
+        where = "goal {}".format(gid if isinstance(gid, str) and gid else i + 1)
+        if gid in (None, ""):
             errors.append("{}: missing \"id\"".format(where))
+        elif not isinstance(gid, str):
+            errors.append("{}: \"id\" must be text".format(where))
         elif gid in ids:
             errors.append("{}: id used twice".format(where))
-        ids.add(gid)
+        else:
+            ids.add(gid)
         _check_goal(goal, where, errors)
     for goal in goals:
-        if isinstance(goal, dict):
-            for req in goal.get("requires", ()):
-                if req not in ids:
-                    errors.append("goal {}: requires unknown goal \"{}\"".format(goal.get("id"), req))
+        if not isinstance(goal, dict):
+            continue
+        for req in _requires(goal):
+            if req not in ids:
+                errors.append("goal {}: requires unknown goal \"{}\"".format(goal.get("id"), req))
+    cycle = _requires_cycle(goals)
+    if cycle:
+        errors.append("goals require each other in a loop ({0}), so none of them can ever "
+                      "open".format(" -> ".join(cycle)))
 
     win = data.get("win", "all_goals")
-    if win != "all_goals" and not (isinstance(win, list) and all(w in ids for w in win)):
-        errors.append("\"win\" must be \"all_goals\" or a list of goal ids")
+    if win != "all_goals":
+        if not isinstance(win, list) or not win:
+            errors.append("\"win\" must be \"all_goals\" or a non-empty list of goal ids")
+        else:
+            for gid in win:
+                if not isinstance(gid, str):
+                    errors.append("\"win\" entries must be goal ids")
+                elif gid not in ids:
+                    errors.append("\"win\": unknown goal \"{}\"".format(gid))
     deadline = data.get("deadline_days")
     if deadline is not None and (not _is_number(deadline) or deadline <= 0):
         errors.append("\"deadline_days\" must be a positive number")
-    for name, outcome in (data.get("outcomes") or {}).items():
-        if name not in ("win", "lose"):
-            errors.append("outcomes: unknown \"{}\" (win or lose)".format(name))
+    outcomes = data.get("outcomes")
+    if outcomes is not None and not isinstance(outcomes, dict):
+        errors.append("\"outcomes\" must be an object")
+        outcomes = {}
+    for outcome_name, outcome in (outcomes or {}).items():
+        if outcome_name not in ("win", "lose"):
+            errors.append("outcomes: unknown \"{}\" (win or lose)".format(outcome_name))
         else:
-            _check_reward(outcome, "outcomes." + name, errors)
+            _check_reward(outcome, "outcomes." + outcome_name, errors)
+    _check_menu(data.get("menu"), errors)
     _check_rules(data.get("rules"), errors)
 
     if errors:
@@ -125,11 +155,29 @@ def _is_number(x):
     return isinstance(x, (int, float)) and not isinstance(x, bool)
 
 
-def _check_who_map(value, where, errors):
+def _check_who_map(value, where, errors, kind):
     if value is None:
         return
     if not isinstance(value, dict) or any(k not in ("active", "all") for k in value):
         errors.append("{} must be {{\"active\": ..., \"all\": ...}}".format(where))
+        return
+    for who, entries in value.items():
+        if kind == "list":
+            if not isinstance(entries, list):
+                errors.append("{}.{} must be a list of names".format(where, who))
+                continue
+            for entry in entries:
+                if not isinstance(entry, str) or not entry.strip():
+                    errors.append("{}.{}: entries must be names".format(where, who))
+                    break
+        else:
+            if not isinstance(entries, dict):
+                errors.append("{}.{} must be an object of name: level".format(where, who))
+                continue
+            for skill, level in entries.items():
+                if not isinstance(skill, str) or not skill.strip() or not _is_number(level) or level < 0:
+                    errors.append("{}.{}: expects \"skill\": level".format(where, who))
+                    break
 
 
 def _check_reward(reward, where, errors):
@@ -141,6 +189,11 @@ def _check_reward(reward, where, errors):
     for key in reward:
         if key not in REWARD_KEYS:
             errors.append("{}: unknown \"{}\" (known: {})".format(where, key, ", ".join(REWARD_KEYS)))
+    if "money" in reward and not _is_number(reward["money"]):
+        errors.append("{}: \"money\" must be a number".format(where))
+    for key in ("trait", "notification"):
+        if key in reward and not isinstance(reward[key], str):
+            errors.append("{}: \"{}\" must be text".format(where, key))
 
 
 def _check_penalty(penalty, where, errors):
@@ -148,16 +201,23 @@ def _check_penalty(penalty, where, errors):
         errors.append("{}: must be an object".format(where))
         return
     kind = penalty.get("type")
+    if kind in (None, ""):
+        errors.append("{}: missing \"type\" (known: {})".format(where, ", ".join(PENALTY_TYPES)))
+        return
     if kind not in PENALTY_TYPES:
         errors.append("{}: unknown type \"{}\" (known: {})".format(where, kind, ", ".join(PENALTY_TYPES)))
         return
     for key in penalty:
         if key not in PENALTY_KEYS:
             errors.append("{}: unknown \"{}\" (known: {})".format(where, key, ", ".join(PENALTY_KEYS)))
-    if kind == "money" and not _is_number(penalty.get("amount")):
-        errors.append("{}: a money penalty needs an \"amount\"".format(where))
-    if kind == "moodlet" and not penalty.get("buff"):
-        errors.append("{}: a moodlet penalty needs a \"buff\" name".format(where))
+    if kind == "money":
+        # A fine is a negative money change, so the sign is the caller's business.
+        if not _is_number(penalty.get("amount")):
+            errors.append("{}: a money penalty needs an \"amount\"".format(where))
+    if kind == "moodlet":
+        buff = penalty.get("buff")
+        if not isinstance(buff, str) or not buff.strip():
+            errors.append("{}: a moodlet penalty needs a \"buff\" name".format(where))
 
 
 def _check_rules(rules, errors):
@@ -168,39 +228,157 @@ def _check_rules(rules, errors):
         return
     seen = set()
     for i, rule in enumerate(rules):
-        where = "rule {}".format(rule.get("id") if isinstance(rule, dict) and rule.get("id") else i + 1)
         if not isinstance(rule, dict):
-            errors.append("{}: must be an object".format(where))
+            errors.append("rule {}: must be an object".format(i + 1))
             continue
-        rid = rule.get("id") or rule.get("type")
-        if rid in seen:
-            errors.append("{}: id used twice".format(where))
-        seen.add(rid)
+        rid = rule.get("id")
+        where = "rule {}".format(rid if isinstance(rid, str) and rid else i + 1)
+        if rid is not None and (not isinstance(rid, str) or not rid.strip()):
+            errors.append("{}: \"id\" must be text".format(where))
+            rid = None
         rtype = rule.get("type")
+        if rtype in (None, ""):
+            errors.append("{}: missing \"type\" (known: {})".format(where, ", ".join(RULE_TYPES)))
+            continue
         if rtype not in RULE_TYPES:
             errors.append("{}: unknown type \"{}\" (known: {})".format(where, rtype, ", ".join(RULE_TYPES)))
             continue
-        if rtype in _RULE_AMOUNTS and not (_is_number(rule.get("amount")) and rule["amount"] > 0):
-            errors.append("{}: a {} rule needs a positive \"amount\"".format(where, rtype))
+        rid = rid or rtype
+        if rid in seen:
+            errors.append("{}: id used twice".format(where))
+        seen.add(rid)
+        if rtype in _RULE_AMOUNTS:
+            amount = rule.get("amount")
+            if not _is_number(amount) or amount <= 0:
+                errors.append("{}: a {} rule needs a positive \"amount\"".format(where, rtype))
         _check_penalty(rule.get("penalty") or {"type": "warning"}, where + " penalty", errors)
+
+
+def _number_field(goal, key, where, errors, minimum=None):
+    value = goal.get(key)
+    if value in (None, ""):
+        errors.append("{}: a {} goal needs \"{}\"".format(where, goal.get("type"), key))
+    elif not _is_number(value):
+        errors.append("{}: \"{}\" must be a number".format(where, key))
+    elif minimum is not None and value < minimum:
+        errors.append("{}: \"{}\" must be at least {}".format(where, key, minimum))
+
+
+def _text_field(goal, key, where, errors):
+    value = goal.get(key)
+    if value in (None, ""):
+        errors.append("{}: a {} goal needs \"{}\"".format(where, goal.get("type"), key))
+    elif not isinstance(value, str):
+        errors.append("{}: \"{}\" must be text".format(where, key))
 
 
 def _check_goal(goal, where, errors):
     gtype = goal.get("type")
+    if gtype in (None, ""):
+        errors.append("{}: missing \"type\" (known: {})".format(where, ", ".join(GOAL_TYPES)))
+        return
     if gtype not in GOAL_TYPES:
         errors.append("{}: unknown type \"{}\" (known: {})".format(where, gtype, ", ".join(GOAL_TYPES)))
         return
     if goal.get("who", "any") not in WHO:
         errors.append("{}: \"who\" must be one of {}".format(where, ", ".join(WHO)))
-    need = {"skill": ("skill", "level"), "household_money": ("amount",), "home_value": ("amount",),
-            "career_level": ("level",), "relationship": ("level",), "aspiration": ("aspiration",),
-            "household_size": ("amount",), "day": ("day",)}.get(gtype, ())
-    for key in need:
-        if goal.get(key) in (None, ""):
-            errors.append("{}: a {} goal needs \"{}\"".format(where, gtype, key))
-    if gtype == "relationship" and goal.get("level") not in RELATIONSHIP_LEVELS:
-        errors.append("{}: relationship level must be one of {}".format(where, ", ".join(RELATIONSHIP_LEVELS)))
+    if "description" in goal and not isinstance(goal["description"], str):
+        errors.append("{}: \"description\" must be text".format(where))
+    if "children" in goal and not isinstance(goal["children"], bool):
+        errors.append("{}: \"children\" must be true or false".format(where))
+
+    if gtype == "skill":
+        _text_field(goal, "skill", where, errors)
+        _number_field(goal, "level", where, errors, minimum=0)
+    elif gtype in ("household_money", "home_value"):
+        _number_field(goal, "amount", where, errors, minimum=0)
+    elif gtype == "career_level":
+        _number_field(goal, "level", where, errors, minimum=1)
+        if goal.get("career") not in (None, "") and not isinstance(goal.get("career"), str):
+            errors.append("{}: \"career\" must be text".format(where))
+    elif gtype == "relationship":
+        level = goal.get("level")
+        if level in (None, ""):
+            errors.append("{}: a relationship goal needs \"level\"".format(where))
+        elif not isinstance(level, str) or level not in RELATIONSHIP_LEVELS:
+            errors.append("{}: relationship level must be one of {}".format(
+                where, ", ".join(RELATIONSHIP_LEVELS)))
+    elif gtype == "aspiration":
+        _text_field(goal, "aspiration", where, errors)
+    elif gtype == "household_size":
+        _number_field(goal, "amount", where, errors, minimum=1)
+    elif gtype == "day":
+        _number_field(goal, "day", where, errors, minimum=1)
+
+    _check_requires(goal, where, errors)
     _check_reward(goal.get("reward"), where + " reward", errors)
+
+
+def _requires(goal):
+    reqs = goal.get("requires")
+    return reqs if isinstance(reqs, list) else []
+
+
+def _check_requires(goal, where, errors):
+    reqs = goal.get("requires")
+    if reqs is None:
+        return
+    if not isinstance(reqs, list):
+        errors.append("{}: \"requires\" must be a list of goal ids".format(where))
+        return
+    for req in reqs:
+        if not isinstance(req, str) or not req.strip():
+            errors.append("{}: \"requires\" entries must be goal ids".format(where))
+            return
+
+
+def _requires_cycle(goals):
+    """The goal ids of a requirement loop (a -> b -> a), or None. Such goals never open."""
+    graph = {}
+    for goal in goals:
+        if isinstance(goal, dict) and isinstance(goal.get("id"), str):
+            graph[goal["id"]] = [req for req in _requires(goal) if isinstance(req, str)]
+    state, stack = {}, []
+
+    def visit(node):
+        state[node] = 1
+        stack.append(node)
+        for nxt in graph.get(node, ()):
+            if nxt not in graph:
+                continue
+            if state.get(nxt, 0) == 1:
+                return stack[stack.index(nxt):] + [nxt]
+            if state.get(nxt, 0) == 0:
+                found = visit(nxt)
+                if found:
+                    return found
+        stack.pop()
+        state[node] = 2
+        return None
+
+    for node in graph:
+        if state.get(node, 0) == 0:
+            found = visit(node)
+            if found:
+                return found
+    return None
+
+
+def _check_menu(menu, errors):
+    if menu is None:
+        return
+    if not isinstance(menu, dict):
+        errors.append("\"menu\" must be an object")
+        return
+    for key in ("category", "difficulty", "tagline", "icon", "template", "entry_method"):
+        if key in menu and not isinstance(menu[key], str):
+            errors.append("menu.{} must be text".format(key))
+    if "sort_order" in menu and not _is_number(menu["sort_order"]):
+        errors.append("menu.sort_order must be a number")
+    entry_method = menu.get("entry_method")
+    if isinstance(entry_method, str) and entry_method.upper() not in (
+            "NEW_HOUSEHOLD", "EXISTING_HOUSEHOLD"):
+        errors.append("menu.entry_method must be NEW_HOUSEHOLD or EXISTING_HOUSEHOLD")
 
 
 # --- Progress --------------------------------------------------------------------------

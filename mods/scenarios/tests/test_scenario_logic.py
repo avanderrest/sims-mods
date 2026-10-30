@@ -44,6 +44,25 @@ def test_example_file_is_valid_without_warnings():
     ({"start": {"cash": 5}}, "unknown \"cash\""),
     ({"deadline_days": -1}, "deadline"),
     ({"win": ["nope"]}, "win"),
+    ({"win": []}, "non-empty"),
+    # Fields that are required but not set, and values of the wrong type.
+    ({"goals": [{"id": "a"}]}, "missing \"type\""),
+    ({"goals": [{"id": "a", "type": "relationship"}]}, "\"level\""),
+    ({"goals": [{"id": 3, "type": "day", "day": 2}]}, "\"id\" must be text"),
+    ({"goals": [{"id": "a", "type": "skill", "skill": "Painting", "level": "6"}]}, "must be a number"),
+    ({"goals": [{"id": "a", "type": "skill", "skill": 5, "level": 3}]}, "must be text"),
+    ({"goals": [{"id": "a", "type": "household_money", "amount": -5}]}, "at least"),
+    ({"goals": [{"id": "a", "type": "day", "day": 0}]}, "at least"),
+    ({"goals": [{"id": "a", "type": "day", "day": 2, "requires": "b"}]}, "list of goal ids"),
+    ({"goals": [{"id": "a", "type": "day", "day": 2, "reward": {"money": "10"}}]}, "\"money\" must be a number"),
+    ({"start": {"traits": {"all": "trait_X"}}}, "list of names"),
+    ({"start": {"skills": {"active": {"Painting": "2"}}}}, "expects"),
+    ({"rules": [{"id": "r"}]}, "missing \"type\""),
+    ({"rules": [{"type": "no_career", "penalty": {"type": "money", "amount": "5"}}]}, "needs an \"amount\""),
+    ({"outcomes": ["win"]}, "\"outcomes\" must be an object"),
+    ({"menu": []}, "\"menu\" must be an object"),
+    ({"menu": {"sort_order": "high"}}, "sort_order must be a number"),
+    ({"menu": {"entry_method": "BOTH"}}, "NEW_HOUSEHOLD"),
 ])
 def test_broken_files_are_refused_with_the_reason(change, message):
     data = dict(RAGS, **change)
@@ -174,3 +193,20 @@ def test_shipped_example_scenarios_are_valid():
     assert files
     for f in files:
         parse(f.read_text(encoding="utf-8"))
+
+
+def test_requirement_loops_are_refused_with_the_loop():
+    data = dict(RAGS, goals=[
+        {"id": "a", "type": "day", "day": 2, "requires": ["b"]},
+        {"id": "b", "type": "day", "day": 3, "requires": ["a"]},
+    ])
+    with pytest.raises(ScenarioError) as e:
+        validate(data)
+    assert "a -> b -> a" in str(e.value)
+
+
+def test_a_goal_cannot_require_itself():
+    data = dict(RAGS, goals=[{"id": "a", "type": "day", "day": 2, "requires": ["a"]}])
+    with pytest.raises(ScenarioError) as e:
+        validate(data)
+    assert "a -> a" in str(e.value)

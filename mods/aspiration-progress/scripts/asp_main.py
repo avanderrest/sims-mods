@@ -89,13 +89,13 @@ def _load_tracks():
     global _tracks, _index
     if _tracks is None:
         tracks = []
-        skipped = 0
+        skipped = []
         for track in services.get_instance_manager(sims4.resources.Types.ASPIRATION_TRACK).types.values():
             # Hidden (never selectable in CAS), FTUE/tutorial and not-yet-granted tracks are
             # not aspirations the player can pick: their levels must not be completed ahead
             # of time.
             if not track_is_selectable(track) or not _track_granted(track):
-                skipped += 1
+                skipped.append(track.__name__)
                 continue
             try:
                 levels = [level for _, level in (track.get_aspirations() or ())]
@@ -106,8 +106,8 @@ def _load_tracks():
                 tracks.append((track, levels))
         _tracks = tracks
         _index = index_tracks(tracks)
-        asp_log.log("aspiration tracks found: {} ({} levels); skipped {} hidden/tutorial"
-                    .format(len(_tracks), len(_index), skipped))
+        asp_log.log("aspiration tracks found: {} ({} levels); skipped {} hidden/tutorial: {}"
+                    .format(len(_tracks), len(_index), len(skipped), ", ".join(sorted(skipped))))
     return _tracks, _index
 
 

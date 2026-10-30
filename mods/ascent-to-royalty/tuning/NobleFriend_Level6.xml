@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dynasty-friendship row for the Noble career panel (rung 6). Informational: the
+     panel cannot inspect a friend's noble rank; the script gate is authoritative. -->
+<I c="Objective" i="objective" m="event_testing.objective_tuning" n="HouseRules_NobleFriend_Level6" s="2130706454">
+  <T n="display_text">{{string:Be friends with someone outside your dynasty}}</T>
+  <T n="tooltip">{{string:Ascent to Royalty checks for a friend outside your own dynasty. The career panel cannot test a friendship, so this row is a reminder; run houserules.royalty.requirements for what is actually met.}}</T>
+</I>

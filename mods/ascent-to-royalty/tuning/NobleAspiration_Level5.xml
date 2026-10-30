@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Overrides EP21's promotion aspiration attached to career_Noble_Level5.
+     The career panel lists the same two requirements the script enforces: net worth and a friend at the current rank or above. -->
+<I c="AspirationCareer" i="aspiration" m="aspirations.aspiration_tuning" n="aspiration_nobleCareer_Level5" s="466311">
+  <L n="objectives">
+    <T>2130706437</T>
+    <T>2130706453</T>
+  </L>
+</I>

@@ -11,19 +11,59 @@ EA's files, so they keep working with EA's own settings and with most other mods
 
 ## Install
 
-1. Install **Python 3.7** (the game's version) and build the mods:
+### After downloading
+
+1. **Unpack the download** somewhere outside the game's `Mods` folder (for example
+   `Documents\Sims 4 mods\`). If you use git, clone the repository instead. The folder must
+   contain `tools\build.py` and the `mods\` folder.
+2. **Install Python 3.7** (the version the game loads). On Windows the launcher is `py -3.7`;
+   newer Python versions produce bytecode the game will not load.
+3. **Close The Sims 4.** The build copies files into the game folder and cannot replace a
+   `.package` the running game still has open (`PermissionError`).
+4. **Open a terminal in the unpacked folder** and build everything:
    ```
    py -3.7 tools/build.py
    ```
-   This runs the unit tests, compiles every mod and copies the result into
+   It runs the unit tests, compiles every mod and copies the result into
    `Documents\Electronic Arts\The Sims 4\Mods\HouseRules\`. Pass a mod name to build only
-   that one, or `--no-install` to build into `build\` and copy the files yourself:
+   that one (see [Installing individual mods](#installing-individual-mods)), or
+   `--no-install` to build into `build\` and copy the files yourself:
    `HouseRules_<mod>.ts4script` for each mod, every `HouseRules_<mod>.package` (Hard Mode's
-   phone menu entry and Flexible University's Early Graduation entry) and the `scenarios`
-   folder.
-2. Start the game and enable mods in **Game Options → Other**:
+   phone menu entry, Flexible University's Early Graduation entry, Social Gates' club labels
+   and Ascent to Royalty's career-panel rows) and the `scenarios` folder.
+5. **Start the game** and enable mods in **Game Options → Other**:
    **Enable Custom Content and Mods** and **Script Mods Allowed**.
-3. Restart the game. Script mods only load at startup.
+6. **Restart the game.** Script mods only load at startup; changing a mod's files also needs
+   a restart (and rebuilding), because the game copies them into memory at launch.
+
+If a build stops with `PermissionError`, the game is still running: close it and run the
+command again. If it says `unchanged`, the files are already up to date.
+
+### Installing individual mods
+
+Every mod is independent: build and install only the ones you want. Pass the folder name
+from `mods\` to the builder, for example `py -3.7 tools/build.py hard-mode`. The builder
+runs that mod's tests and copies its files to `Mods\HouseRules\`:
+
+| Mod (folder) | Files installed | Also needs |
+|---|---|---|
+| Hard Mode (`hard-mode`) | `HouseRules_hard-mode.ts4script`, `HouseRules_hard-mode.package` | Base game. The package adds the phone's **Pay Off Debt**; without it the rest still works. |
+| Flexible University (`flexible-university`) | `HouseRules_flexible-university.ts4script`, `HouseRules_flexible-university.package` | **Discover University** (inactive without it). The package adds the phone's **Apply for Early Graduation**. |
+| Neighborhood Stories Rebalance (`neighborhood-stories-rebalance`) | `HouseRules_neighborhood-stories-rebalance.ts4script` | Base game; Neighborhood Stories must be on for the households you want it to affect. |
+| Social Standing (`social-standing`) | `HouseRules_social-standing.ts4script` | Base game. Get Famous and Lovestruck add their own fame and chemistry factors when installed. |
+| Ascent to Royalty (`ascent-to-royalty`) | `HouseRules_ascent-to-royalty.ts4script`, `HouseRules_ascent-to-royalty.package` | **EP21 Royalty & Legacy** (inactive without it). The package adds the requirements to the Noble career panel. |
+| Social Gates (`social-gates`) | `HouseRules_social-gates.ts4script`, `HouseRules_social-gates.package` | Base game; club rules need **Get Together**. The package adds the club wealth labels. |
+| Aspiration Progress (`aspiration-progress`) | `HouseRules_aspiration-progress.ts4script` | Base game. |
+| Scenarios (`scenarios`) | `HouseRules_scenarios.ts4script`, the `scenarios` folder | Base game. Keep `scenarios\` next to the script: it holds the ready-made JSON challenges, and it is where custom ones go. |
+| NPC Routines (`npc-routines`) | `HouseRules_npc-routines.ts4script` | Base game for JSON routines. The optional AI brain also needs Ollama (or another local LLM) and `start-llm.cmd`. |
+| Self-test (`self-test`) | `HouseRules_self-test.ts4script` | Developer tool. Run `houserules.test` in the cheat console. |
+| Hello World (`hello-world`) | `HouseRules_hello-world.ts4script` | Developer tool: only proves the build and script loading work. |
+
+If you copy a mod by hand (or build with `--no-install`, which leaves the files in
+`build\`), copy every file listed for it. Script-only mods need just the `.ts4script`; the
+extra `.package` holds tuning (phone entries, club labels) and is
+optional only if you don't want that feature. Keep the per-mod `.ts4script` and `.package`
+names unchanged, and do not split a mod's files across different folders.
 
 To remove a mod, delete its files from the folder. To remove everything, delete the
 `HouseRules` folder. Saves stay intact; the mods' own state lives in
@@ -36,11 +76,11 @@ check `lastException*.txt` in `Documents\Electronic Arts\The Sims 4\`.
 
 | Mod | What it does |
 |---|---|
-| [Hard Mode](#hard-mode) | Makes the game harder by gating things behind requirements: careers need skills or a degree, selling pays less, bills and debt exist, skills need talent, bad moods linger. |
+| [Hard Mode](#hard-mode) | Makes the game harder by gating things behind requirements: careers need skills or a degree, selling pays less, and bills and debt exist. |
 | [Flexible University](#flexible-university) | Discover University without the rigid pacing: leave early with a Certificate or Associate Degree, keep the credits you earned, graduate on Friday evening, and earn fractional credits for good grades. |
 | [Neighborhood Stories Rebalance](#neighborhood-stories-rebalance) | Makes EA's Neighborhood Stories follow real-life patterns: rare adoption with a same-sex route, university or a skill-matched career on age-up, realistic move-outs and relationships, and no more whole families vanishing. |
 | [Social Standing](#social-standing) | Friendships and romances build at a realistic pace: compatibility sets the speed, and a big gap in wealth, fame or title makes sims act like celebrities around each other. |
-| [Ascent to Royalty](#ascent-to-royalty) | The climb from knight to monarch takes savings, generations and alliances: the game's Noble career only promotes you when your dynasty has earned the next rank. |
+| [Ascent to Royalty](#ascent-to-royalty) | The climb from knight to monarch takes net worth and noble friendships: the game's Noble career only promotes you when the Sim has the next rank's wealth and a friend at their current rank or above. |
 | [Social Gates](#social-gates) | Social access means something: only friends let you into their house or accept an invite, and clubs only accept sims who fit their traits, skills or activities. |
 | [Aspiration Progress](#aspiration-progress) | Aspiration goals count whenever you complete them, even before you reach that level — and a level pays out as soon as all its goals are done. |
 | [Scenarios](#scenarios) | Play custom challenges from simple text files: starting conditions, goals that check themselves, and rules with penalties. Seven examples included. |
@@ -83,8 +123,6 @@ part can be switched off individually. Settings are saved in
   (around level 2 in the main skill), *or* any completed university degree, *or* a Flexible
   University Certificate or Associate Degree. Only entry is gated;
   promotion is still EA's own. Part-time and teen jobs are not gated.
-- **Getting fired.** Missing several work days in a week, or very bad performance, gets a sim
-  fired — and other employers refuse them for a few days.
 - **Selling pays less.** Made and gathered things (paintings, crafts, harvests, fish, gems)
   sell for less than their listed value. The market also fills up: selling lots of one kind
   makes that kind worth less for a week, then it recovers.
@@ -94,30 +132,22 @@ part can be switched off individually. Settings are saved in
   instead of simply shutting the power off, and too much debt limits buying a home or opening
   a business. With debt, the phone gets a **Pay Off Debt** option (and the debt is paid down
   daily from household funds when possible).
-- **Skill aptitude.** Each young adult gets one or two random talents, and traits give
-  affinities for related skills. Without a talent or matching trait, skills slow down past
-  level 7.
-- **Life costs.** Relationships fade faster, strong bad moods linger, pregnancy and childbirth
-  cost money, childcare costs per child, and reward-store items cost more.
-- **Starting funds.** New households start with §10,000 instead of §20,000.
 
 Commands (cheat console, Ctrl+Shift+C):
 
 ```
 houserules.hard.status                 show every setting and its value
-houserules.hard.set <setting> on|off   change one (start_funds takes a number)
+houserules.hard.set <setting> on|off   change one
 houserules.hard.careers on|off         turn career gates on or off
 houserules.hard.enforce on|off         actually refuse jobs that fail the gate (off by default: it only logs)
 houserules.hard.check <career>         what the rule decides for the selected sim, and why
 houserules.hard.gates                  which careers/skills the gate table matched
-houserules.hard.skills                 selected sim's talents and skill factors
 houserules.hard.money.status           markup table, market prices and debt
 houserules.hard.money.pay_debt         pay debt early (no amount opens a picker)
 houserules.hard.money.reset            forget this household's sales history and debt
 ```
 
-Settings: `careers`, `enforce`, `firing`, `selling`, `markups`, `bills`, `debt`, `skills`,
-`life`, `start_funds`.
+Settings: `careers`, `enforce`, `selling`, `markups`, `bills`, `debt`.
 
 ## Neighborhood Stories Rebalance
 
@@ -206,33 +236,50 @@ houserules.social.royal on|off           mark a sim as royalty (for saves with n
 ## Ascent to Royalty
 
 Needs **EP21 Royalty & Legacy**; without it the mod loads but stays inactive. Royal status
-becomes a family project: the pack's Noble career still supplies the titles, inheritance and
-one-monarch-per-world rule, but a promotion only happens when the dynasty can pay for it.
+becomes a personal climb: the pack's Noble career still supplies the titles, inheritance and
+one-monarch-per-world rule, but a promotion only happens when the Sim meets the next rank's
+requirements.
 
-- **Savings.** Each rank asks for liquid household funds, not the home's value. The numbers
-  are sized to a normal lifespan of Noble pay: about §85,000 earned per generation, so the
-  crown asks for §250,000 after roughly three generations of steady work.
-- **Generations.** The mod counts family-tree depth from the first titled generation. The
-  crown expects the third generation; earlier rungs expect one or two.
-- **Alliances.** Native dynasty alliances count. The crown asks for four.
-- **Milestones.** From Viscount upward, the dynasty needs a living heir and a member who
-  reached the top of a non-noble career.
+- **Net worth.** Each rank asks for household net worth (funds plus home). The numbers follow
+  the old savings ladder: §35,000 to become a Baronet, rising to §200,000 for Grand Duke.
+- **Dynastic friendships.** The Sim must be friends (friendship track 30 or above) with
+  someone **outside their own dynasty** - an outside alliance, at any rank. Only kin in the
+  Sim's own dynasty are excluded; a friend who belongs to no dynasty at all counts, which is
+  what makes this reachable, since the pack's noble NPCs have no dynasty record. Rank is not
+  consulted: a default save has barely any titled sims, so asking for a friend at your own
+  rank made promotion all but impossible. The promotion message and
+  `houserules.royalty.requirements` name the friend they have.
+- **The crown is monarchy only.** From Grand Duke, the only requirement is that the region has
+  no Monarch. The pack's exclusive-level rule enforces the vacancy.
 - **Marriage and inheritance skip the grind.** A spouse or child who inherits or claims a
-  title reaches that rank without the savings, generation or alliance checks, as the pack
-  intends. That includes a promised crown: the gate is on the earned promotion path, because
-  refusing a native inheritance inside the hook would leave the pack believing the title
-  passed. The pack still decides who may inherit or claim, and keeps one holder per world.
-- **The earned crown** also needs the claimant to be the dynasty head and the throne to be
-  vacant; the pack's exclusive-level rule enforces the vacancy.
+  title reaches that rank without the net worth or friendship checks, as the pack intends.
+  That includes a promised crown: the gate is on the earned promotion path, because refusing
+  a native inheritance inside the hook would leave the pack believing the title passed. The
+  pack still decides who may inherit or claim, and keeps one holder per world.
+
+Requirements are visible in game through `houserules.royalty.requirements`. The career
+panel also lists them: `HouseRules_ascent-to-royalty.package` replaces the requirement
+aspiration for each Noble career level, so the panel shows the two rows the script checks
+instead of EA's own Charisma requirement (level 1 keeps Charisma as well). Those rows are
+a reminder, not a progress bar - the panel cannot test net worth, a noble friend or a
+vacant throne, so nothing ticks there. Without the package the mod still works; the panel
+just keeps EA's requirement.
+
+**Inviting fellow nobles.** A noble can use a throne's **Invite Fellow Nobles**: every
+noble in the save at their rank or below is summoned to the lot. A Duke's invitation reaches
+Dukes, Marquesses, Viscounts and down, never a knight who outranks them. That is the quickest
+way to build the noble friendships a promotion asks for. `houserules.royalty.invite` does the
+same from the cheat console, which is also how to test it without owning a throne.
 
 ```
-houserules.royalty.status              this dynasty, its rank and the next gate
+houserules.royalty.status              this Sim, its rank and the next gate
 houserules.royalty.check [sim]         what the next promotion needs, and what is missing
+houserules.royalty.requirements [sim]  every requirement for the next rank, met or not
 houserules.royalty.levels              every native noble level and its gate
 houserules.royalty.on / .off
-houserules.royalty.set <kind> on|off   enabled, notify, wealth, generation, alliances,
-                                       milestones, crown
-houserules.royalty.ally <sim id>       form a native dynasty alliance (testing/politics)
+houserules.royalty.set <kind> on|off   enabled, notify, net_worth, friend, monarch
+houserules.royalty.invite              summon the nobles at or below this Sim's rank
+houserules.royalty.ally <sim id>       form a native dynasty alliance (not part of the gate)
 houserules.royalty.grant <level>       force a noble level, bypassing the gate (testing)
 houserules.royalty.reset               forget this dynasty's recorded progress
 ```
@@ -424,6 +471,9 @@ The menu export is deliberately partial:
 - Starting money, traits and skills are exported; `remove_careers` is not.
 - `menu.category` and `menu.difficulty` in the JSON (or the two fields on the page) must be EA
   enum names; leave them empty if you only use the cheat-driven script version.
+- `menu.icon` picks the card art by an EA icon name from the page's **Card icon** list
+  (`tools/scenario_icons.py` holds the names and resource keys; no image files are shipped).
+  A raw `type:group:instance` resource key also works.
 
 The `.package` path means a menu scenario and the script scenario can coexist: start from the
 Scenarios screen or use `houserules.scenario.start`. The script mod's rules and custom goals
@@ -636,9 +686,6 @@ These mods don't overwrite EA files, but they do hook interactions, so:
 - Hard Mode changes shop and stall markups; a mod that changes pricing will fight it.
 - Neighborhood Stories Rebalance changes the story-arc weights in memory. A mod that replaces
   EA's story progression entirely won't be affected, and won't be affected *by* it either.
-- Social Standing and Hard Mode both touch relationship speed, by design: Hard Mode makes all
-  relationships fade faster, Social Standing slows how fast they build between badly matched
-  sims. They don't need each other and can be used alone.
 - Flexible University hooks the university degree tracker (`complete_term`, the end-of-term
   alarm, dropout and graduation). A mod that replaces or hooks those methods will fight it;
   it doesn't change the credit requirement or the course list.

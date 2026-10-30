@@ -1,20 +1,64 @@
 {
   "name": "Starving Artist",
   "description": "§500 to your name. Become a painter, then make it in the Painter career.",
-  "start": {"money": 500},
+  "start": {
+    "money": 500
+  },
   "goals": [
-    {"id": "practice", "type": "skill", "skill": "Painting", "level": 4, "who": "active",
-     "reward": {"money": 500}},
-    {"id": "job", "type": "career_level", "career": "painter", "level": 1, "who": "active",
-     "requires": ["practice"], "description": "Join the Painter career"},
-    {"id": "promoted", "type": "career_level", "career": "painter", "level": 5, "who": "active",
-     "requires": ["job"], "reward": {"money": 2000}},
-    {"id": "friend", "type": "relationship", "level": "good_friend", "who": "active",
-     "description": "Make a good friend who believes in your art"}
+    {
+      "id": "practice",
+      "type": "skill",
+      "skill": "Painting",
+      "level": 4,
+      "who": "active",
+      "reward": {
+        "money": 500
+      }
+    },
+    {
+      "id": "job",
+      "type": "career_level",
+      "career": "painter",
+      "level": 1,
+      "who": "active",
+      "requires": [
+        "practice"
+      ],
+      "description": "Join the Painter career"
+    },
+    {
+      "id": "promoted",
+      "type": "career_level",
+      "career": "painter",
+      "level": 5,
+      "who": "active",
+      "requires": [
+        "job"
+      ],
+      "reward": {
+        "money": 2000
+      }
+    },
+    {
+      "id": "friend",
+      "type": "relationship",
+      "level": "good_friend",
+      "who": "active",
+      "description": "Make a good friend who believes in your art"
+    }
   ],
   "deadline_days": 42,
   "outcomes": {
-    "win": {"notification": "Your work hangs in galleries now."},
-    "lose": {"notification": "The canvas stays blank. For now."}
+    "win": {
+      "notification": "Your work hangs in galleries now."
+    },
+    "lose": {
+      "notification": "The canvas stays blank. For now."
+    }
+  },
+  "menu": {
+    "category": "Challenge",
+    "difficulty": "INTERMEDIATE",
+    "entry_method": "EXISTING_HOUSEHOLD"
   }
 }

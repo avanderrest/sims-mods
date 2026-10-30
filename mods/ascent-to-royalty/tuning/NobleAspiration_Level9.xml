@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Overrides EP21's promotion aspiration attached to career_Noble_Level9.
+     From Grand Duke the only requirement is that no higher rank is in the region, i.e. no Monarch. -->
+<I c="AspirationCareer" i="aspiration" m="aspirations.aspiration_tuning" n="aspiration_nobleCareer_Level9" s="466306">
+  <L n="objectives">
+    <T>2130706465</T>
+  </L>
+</I>

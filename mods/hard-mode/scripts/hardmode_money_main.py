@@ -14,7 +14,6 @@ markups  - BusinessManager.get_value_with_markup (retail, restaurants, small bus
 bills    - Bills._get_bill_multiplier: bills scale with household size.
 debt     - Bills._shut_off_utility: the unpaid bill becomes debt instead (up to a limit);
            a daily alarm charges interest and takes repayments.
-start_funds - on loading a household for the first time, it's cut to the setting.
 
 Cheats:
   houserules.hard.money.status   - markup table, this household's market and debt
@@ -38,13 +37,12 @@ import hardmode_log
 import hardmode_state
 from hardmode_money import (MarketLedger, bill_to_debt, credit_limit, daily_debt_step,
                             household_size_bill_factor, item_kind, markup_curve, markup_satisfaction_factor,
-                            markup_scale, repay_debt, repay_options, sell_multiplier, starting_funds_cut)
+                            markup_scale, repay_debt, repay_options, sell_multiplier)
 
 PAY_DEBT_AFFORDANCE_ID = 9634109801551932310   # s= in tuning/PayOffDebt.xml
 
 _LEDGER_FILE = "hard_mode_market.json"
 _DEBT_FILE = "hard_mode_debt.json"   # {household_id: debt}
-_FUNDS_FILE = "hard_mode_start_funds.json"  # [household_id, ...] already given the start-funds cut
 
 _ledger = None
 _debts = None
@@ -347,7 +345,7 @@ def _bill_into_debt(bills):
 
 def add_debt(household, amount, reason):
     """Adds a cost the household couldn't pay to its debt (no credit limit check: this is
-    for things already done, like childcare)."""
+    for things already done)."""
     debts = _get_debts()
     debts[str(household.id)] = debts.get(str(household.id), 0) + int(amount)
     hardmode_state.save_json(_DEBT_FILE, debts)
@@ -441,26 +439,6 @@ def _wrap_phone():
     Sim.potential_phone_interactions = potential_phone_interactions
 
 
-# --- Starting funds --------------------------------------------------------------------
-def _apply_starting_funds():
-    household = services.active_household()
-    if household is None or not household.is_first_time_playing():
-        return
-    done = set(str(x) for x in hardmode_state.load_json(_FUNDS_FILE, []))
-    if str(household.id) in done:
-        return
-    target = hardmode_state.setting("start_funds")
-    cut = starting_funds_cut(household.funds.money, target)
-    done.add(str(household.id))
-    hardmode_state.save_json(_FUNDS_FILE, sorted(done))
-    hardmode_log.log("new household {} ({}): funds {}, start_funds setting {}, cut {}".format(
-        household.name, household.id, household.funds.money, target, cut))
-    if cut > 0:
-        household.funds.try_remove(cut, Consts_pb2.TELEMETRY_INTERACTION_COST, None)
-        hardmode_state.notify("Hard Mode", "The {} household starts with §{} less (Hard Mode starting funds: §{})."
-                              .format(household.name, cut, target))
-
-
 # --- Install -------------------------------------------------------------------------
 def _install_once():
     global _installed
@@ -483,11 +461,6 @@ def on_zone_loaded(zone):
         _start_debt_alarm(zone)
     except Exception:
         hardmode_log.log_exception("starting the debt alarm")
-    if hardmode_state.setting("start_funds") is not None:
-        try:
-            _apply_starting_funds()
-        except Exception:
-            hardmode_log.log_exception("starting funds")
 
 
 # --- Cheats --------------------------------------------------------------------------

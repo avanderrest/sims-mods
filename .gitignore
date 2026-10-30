@@ -5,6 +5,14 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
+# Other creators' mods kept for reference (not ours to publish, not built).
+reference-mods/
+
+# Format references: EA's binary template and the Sims 4 Toolkit sources our SimData writer
+# is ported from. Downloaded by hand, not needed to build, and not ours to publish.
+# tools/simdata.py stands on its own; see references/README.md.
+references/
+
 # Overnight scheduler runner, lock and log (machine-specific).
 overnight/
 
@@ -16,3 +24,9 @@ venv/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Personal notes, kept on this machine only.
+Notes.txt
+
+
+Notes.txt

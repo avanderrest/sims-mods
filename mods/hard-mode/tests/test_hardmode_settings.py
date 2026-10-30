@@ -56,9 +56,6 @@ def test_save_then_load_round_trip(tmp_path):
     assert s2.get("careers") is False
 
 
-def test_numeric_setting_stays_a_number():
+def test_all_settings_are_switches():
     s = Settings()
-    s.set("start_funds", "5000")
-    assert s.get("start_funds") == 5000
-    assert not s.is_switch("start_funds")
-    assert s.is_switch("selling")
+    assert all(s.is_switch(key) for key in DEFAULT_SETTINGS)

@@ -180,6 +180,13 @@
         <input id="f-menu-tagline" placeholder="short card text">
       </div>
     </div>
+    <div class="row">
+      <div class="field">
+        <label for="f-menu-icon">Card icon</label>
+        <select id="f-menu-icon"></select>
+        <span class="hint">EA's icon names; the image stays in the game.</span>
+      </div>
+    </div>
 
     <div class="actions">
       <button class="primary" onclick="save()">Save</button>
@@ -215,6 +222,7 @@ const WHO = META.who;
 const RELATIONSHIPS = META.relationships;
 const RULE_TYPES = META.rule_types;
 const PENALTY_TYPES = META.penalty_types;
+const ICONS = META.icons || [];
 let data = blank();
 let loaded = {source: null, name: null};
 
@@ -278,8 +286,27 @@ function fill() {
   $("#f-menu-sort").value = m.sort_order || "";
   $("#f-menu-template").value = m.template || "";
   $("#f-menu-tagline").value = m.tagline || "";
+  setIconValue(m.icon || "");
   renderGoals();
   renderRules();
+}
+
+function fillIconOptions() {
+  const sel = $("#f-menu-icon");
+  sel.innerHTML = '<option value="">(EA default)</option>' + ICONS.map(icon =>
+    `<option value="${icon.name}" title="${escapeHtml(icon.path)}">${icon.name}</option>`).join("");
+}
+
+function setIconValue(value) {
+  const sel = $("#f-menu-icon");
+  // A raw resource key from the JSON view is not in the list; show it rather than lose it.
+  if (value && !Array.from(sel.options).some(option => option.value === value)) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    sel.appendChild(option);
+  }
+  sel.value = value || "";
 }
 
 function field(label, inner, narrow) {
@@ -323,6 +350,27 @@ function goalFields(g, i) {
   return html;
 }
 
+function requiresInput(g, i) {
+  // Checkboxes, not a text field: `requires` is a list of other goal ids, and ids are
+  // defined by the Id boxes on the other goal cards in this scenario.
+  const own = (g.id || "").trim();
+  const required = (g.requires || []).map(String);
+  const ids = [];
+  (data.goals || []).forEach(other => {
+    const id = (other.id || "").trim();
+    if (id && id !== own && !ids.includes(id)) ids.push(id);
+  });
+  const known = new Set((data.goals || []).map(other => (other.id || "").trim()));
+  // A requirement whose goal was renamed or deleted stays visible instead of being dropped;
+  // Validate reports it.
+  required.forEach(id => { if (id !== own && !ids.includes(id)) ids.push(id); });
+  if (!ids.length) return '<span class="hint" style="margin:0">no other goals yet</span>';
+  const boxes = ids.map(id =>
+    `<label title="${escapeHtml(id)}"><input type="checkbox" value="${escapeHtml(id)}"` +
+    `${required.includes(id) ? " checked" : ""}> ${escapeHtml(id)}${known.has(id) ? "" : " (unknown)"}</label>`).join("");
+  return `<span class="checks" style="flex-wrap:wrap; gap:12px" data-g="${i}" data-k="requires">${boxes}</span>`;
+}
+
 function renderGoals() {
   const box = $("#goals");
   box.innerHTML = (data.goals || []).map((g, i) => {
@@ -333,9 +381,9 @@ function renderGoals() {
         <button class="danger" onclick="removeGoal(${i})">Remove</button>
       </div>
       <div class="row">
-        ${field("Id", textInput(g.id, `data-g="${i}" data-k="id"`), true)}
+        ${field("Id", textInput(g.id, `data-g="${i}" data-k="id" onchange="structuralChange()"`), true)}
         ${field("Type", selectInput(GOAL_TYPES, g.type, `data-g="${i}" data-k="type" onchange="structuralChange()"`))}
-        ${field("Requires", textInput((g.requires || []).join(", "), `data-g="${i}" data-k="requires" placeholder="goal id, goal id"`))}
+        ${field("Requires", requiresInput(g, i))}
       </div>
       <div class="row">${goalFields(g, i)}</div>
       <div class="row">
@@ -417,7 +465,11 @@ function collect() {
     if (t === "household_size") { g.amount = numOrUndefined(get("amount")); const chk = card.querySelector('[data-k="children"]'); if (chk && chk.checked) g.children = true; }
     if (t === "day") g.day = numOrUndefined(get("day"));
     if (t === "custom") g.description = (get("description") || "").trim();
-    const requires = textToList(get("requires"));
+    const requiresEl = card.querySelector('[data-k="requires"]');
+    const requires = requiresEl
+      ? Array.from(requiresEl.querySelectorAll('input[type="checkbox"]:checked'))
+          .map(box => box.value)
+      : [];
     if (requires.length) g.requires = requires;
     const reward = {};
     const rm = numOrUndefined(get("reward.money"));
@@ -469,6 +521,7 @@ function collect() {
   const ms = numOrUndefined($("#f-menu-sort").value); if (ms !== undefined) menu.sort_order = ms;
   const mt = $("#f-menu-template").value.trim(); if (mt) menu.template = mt;
   const mg = $("#f-menu-tagline").value.trim(); if (mg) menu.tagline = mg;
+  const mi = $("#f-menu-icon").value; if (mi) menu.icon = mi;
   if (nonEmpty(menu)) d.menu = menu; else delete d.menu;
 
   return d;
@@ -609,6 +662,7 @@ async function applyJson() {
   reportFrom(result, "JSON applied");
 }
 
+fillIconOptions();
 newScenario();
 refreshList();
 if (location.protocol === "file:") {

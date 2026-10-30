@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Net-worth row in the Noble career panel. Displayed only: the panel cannot
+     test net worth, so the script gate in atr_logic.py is authoritative. -->
+<I c="Objective" i="objective" m="event_testing.objective_tuning" n="HouseRules_NobleSavings_Level5" s="2130706437">
+  <T n="display_text">{{string:Have a net worth of §110,000}}</T>
+  <T n="tooltip">{{string:The career panel cannot test net worth; run houserules.royalty.requirements to see whether this is met. Ascent to Royalty also needs a friend at your current rank or above.}}</T>
+</I>

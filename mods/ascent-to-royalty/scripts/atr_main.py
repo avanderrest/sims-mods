@@ -2,52 +2,65 @@
 
 Hook: NobleCareer._promote. The pack's Noble career calls it for a performance promotion,
 for inheriting a promised title, and for claiming an available title. Before that happens we
-check the rank being moved to against the dynasty's wealth, generation, alliances and
-milestones, and refuse (returning None, so no promotion dialog appears) when something is
-missing. Inherited, married-in and claimed titles are always let through, including a
-promised crown: refusing one inside the hook would leave the pack believing the title passed
-when it did not. The gate is on the earned promotion path; the pack still decides who may
-inherit or claim, and keeps one holder per world.
+check the rank being moved to against the Sim's net worth and noble friendships, and refuse
+(returning None, so no promotion dialog appears) when something is missing. Inherited,
+married-in and claimed titles are always let through, including a promised crown: refusing
+one inside the hook would leave the pack believing the title passed when it did not. The gate
+is on the earned promotion path; the pack still decides who may inherit or claim, and keeps
+one holder per world.
 
 Where the numbers come from:
-- Wealth: household net worth (money plus home).
-- Generation: family-tree depth below the first Sim recorded for this dynasty. It rises when
-  the title passes to a descendant, and never goes back down.
-- Alliances: the pack's own dynasty alliances (counted on both sides).
-- Milestones: a living heir in the dynasty, and a dynasty member at the top of a non-noble
-  career.
-- Crown: the claimant must be the dynasty head and the world's top noble title must be vacant
-  (the pack already enforces one holder per world; this only reports it).
+- Net worth: household net worth (money plus home).
+- Friendship: the Sim must be friends with someone outside their own dynasty. Rank is not
+  consulted - a default save has barely any titled sims. Friendship is the game's friendship
+  track; the threshold is FRIEND_MIN_SCORE.
+- Crown: from Grand Duke the only requirement is that no higher rank is in the region: no
+  Monarch holds the throne (the pack already enforces one holder per world).
 
 The pack is required. Without EP21 the mod loads but stays inactive and logs why.
 
+The requirements are visible in game. The career panel's own promotion list is EA client
+tuning, so it cannot be filled from a script; instead the nine requirement aspirations
+attached to the Noble career levels are overridden (tuning/NobleAspiration_*.xml,
+tuning/NobleSavings_*.xml and tuning/NobleFriend_*.xml) to show the same two requirements.
+Those rows are display only: the game cannot test net worth, a friend's noble rank or a
+vacant throne from a career objective, so nothing ticks in the panel. The script gate below
+is the authority.
+
 Cheats:
-  houserules.royalty.status              this dynasty, its rank and the next gate
+  houserules.royalty.status              this Sim, its rank and the next gate
   houserules.royalty.check [sim]         what the next promotion needs, and what is missing
+  houserules.royalty.requirements [sim]  every requirement for the next rank, met or not
   houserules.royalty.levels              every native noble level and its gate
   houserules.royalty.on / .off
-  houserules.royalty.set <kind> on|off   enabled, notify, wealth, generation, alliances,
-                                         milestones, crown
+  houserules.royalty.set <kind> on|off   enabled, notify, net_worth, friend, monarch
+  houserules.royalty.panel               re-send this Sim's panel rows (ticked when met)
+  houserules.royalty.friends             every friend, their dynasty, and whether it counts
+  houserules.royalty.invite              summon the nobles at or below this Sim's rank
   houserules.royalty.ally <sim id>       form a native dynasty alliance (testing/politics)
   houserules.royalty.grant <level>       force a native noble level, bypassing the gate
   houserules.royalty.reset               forget this dynasty's recorded progress
 """
 import json
 import os
+import re
 
 import services
 import sims4.commands
-from server_commands.argument_helpers import OptionalSimInfoParam, get_optional_target
+from server_commands.argument_helpers import (OptionalSimInfoParam, OptionalTargetParam,
+                                             get_optional_target)
 
 import atr_log
-from atr_logic import (CHECKS, failure_text, format_money, missing, rank_for_level,
-                       rank_title)
+from atr_logic import (CHECKS, failure_text, format_money, is_crown, missing, noble_guests,
+                       rank_for_level, rank_title, requirements)
+
+_FRIEND_MIN_SCORE = 30   # the game's friendship track: at/above this is a friend
 
 _DATA_DIR = os.path.join(os.path.expanduser("~"), "Documents", "Electronic Arts", "The Sims 4", "Mods",
                          "HouseRules", "data")
 _STATE_FILE = os.path.join(_DATA_DIR, "ascent_to_royalty.json")
-_DEFAULTS = {"enabled": True, "notify": True, "wealth": True, "generation": True,
-             "alliances": True, "milestones": True, "crown": True}
+_DEFAULTS = {"enabled": True, "notify": True, "net_worth": True, "friend": True,
+             "monarch": True}
 _SETTING_KEYS = tuple(_DEFAULTS)
 
 # EP21 = Royalty & Legacy. NobleCareer lives in its simulation scripts.
@@ -125,19 +138,21 @@ def _name(sim_info):
         or str(getattr(sim_info, "sim_id", "?"))
 
 
-def _wealth(sim_info):
-    """Savings, not the home. The ladder is calibrated to Noble pay, so an expensive house
-    should not buy a title; three generations of steady salary should."""
+def _net_worth(sim_info):
+    """Household net worth (funds plus home), the same number the career panel shows."""
     household = getattr(sim_info, "household", None)
     if household is None:
         return 0
     try:
-        return household.funds.money
+        return household.household_net_worth()
     except Exception:
         try:
             return household.household_net_worth(billable=False)
         except Exception:
-            return 0
+            try:
+                return household.funds.money
+            except Exception:
+                return 0
 
 
 def _noble_career(sim_info):
@@ -200,9 +215,6 @@ def _record(sim_info, dynasty):
             "name": (getattr(sim_info, "last_name", "") or _name(sim_info)),
             "founder_id": getattr(sim_info, "id", None),
             "founded": _today(),
-            "base_depth": None,
-            "generation": 1,
-            "milestones": {},
             "best_level": -1,
             "promotions": [],
         }
@@ -210,133 +222,58 @@ def _record(sim_info, dynasty):
     return record
 
 
-def _generation(sim_info, record):
-    """Family-tree depth relative to the first titled generation we recorded.
+def _dynasty_friend(sim_info):
+    """The name of a friend outside the Sim's own dynasty, or None.
 
-    A Sim with no family tree still counts as generation 1. The stored value only ever
-    rises, so a save reload or a new head cannot reset the climb.
+    Rank is deliberately not consulted: a default save has barely any titled sims. Only kin
+    in one's *own* dynasty are excluded - a friend who belongs to no dynasty at all counts,
+    which is what makes this reachable (the pack's noble NPCs have no dynasty record).
     """
-    depth = None
+    tracker = getattr(sim_info, "relationship_tracker", None)
+    if tracker is None:
+        return None
     try:
-        depth = sim_info.genealogy.get_generation_depth()
+        from relationships.relationship_track import RelationshipTrack
+        track = RelationshipTrack.FRIENDSHIP_TRACK
     except Exception:
-        depth = None
-    if depth is None:
-        return max(1, int(record.get("generation", 1)))
-    if record.get("base_depth") is None:
-        record["base_depth"] = depth
+        atr_log.log_exception("reading the friendship track")
+        return None
+    own = _dynasty(sim_info)
+    own_id = getattr(own, "id", None)
+    manager = services.sim_info_manager()
     try:
-        generation = max(1, int(depth) - int(record["base_depth"]) + 1)
-    except (TypeError, ValueError):
-        generation = 1
-    record["generation"] = max(int(record.get("generation", 1)), generation)
-    return record["generation"]
-
-
-def _alliance_count(dynasty):
-    if dynasty is None:
-        return 0
-    try:
-        service = services.dynasty_service()
-        return sum(1 for other in service.get_all_dynasties().values()
-                   if other.id != dynasty.id and dynasty.is_ally(other))
-    except Exception:
-        atr_log.log_exception("counting dynasty alliances")
-        return 0
-
-
-def _dynasty_sims(sim_info, dynasty):
-    """Every Sim whose milestones count for this dynasty."""
-    if dynasty is not None:
-        manager = services.sim_info_manager()
-        found = []
-        for sim_id in dynasty.get_members():
-            member = manager.get(sim_id)
-            if member is not None and not getattr(member, "is_dead", False):
-                found.append(member)
-        if found:
-            return found
-    household = getattr(sim_info, "household", None)
-    if household is not None:
-        try:
-            return [member for member in household.sim_info_gen()
-                    if not getattr(member, "is_dead", False)]
-        except Exception:
-            pass
-    return [sim_info]
-
-
-def _has_heir(sim_info, dynasty):
-    try:
-        head = dynasty.get_head_sim_info() if dynasty is not None else None
-    except Exception:
-        head = None
-    head = head or sim_info
-    try:
-        for child in head.genealogy.get_child_sim_infos_gen():
-            if child is None or getattr(child, "is_dead", False):
-                continue
-            if dynasty is None or dynasty.is_member(child.id):
-                return True
-    except Exception:
-        atr_log.log_exception("looking for an heir")
-    return False
-
-
-def _has_career_peak(sim_info, dynasty):
-    """A dynasty member at the top level of a non-noble career."""
-    try:
-        from kingdom.kingdom_tuning import KingdomTuning
-        noble_guid = KingdomTuning.NOBLE_CAREER.guid64
-    except Exception:
-        noble_guid = None
-    for member in _dynasty_sims(sim_info, dynasty):
-        tracker = getattr(member, "career_tracker", None)
-        if tracker is None:
-            continue
-        for career in getattr(tracker, "careers", {}).values():
+        for other_id in tracker.target_sim_gen():
             try:
-                if noble_guid is not None and career.guid64 == noble_guid:
+                if other_id == getattr(sim_info, "id", None):
                     continue
-                levels = career.current_track_tuning.career_levels
-                if levels and career.level >= len(levels) - 1:
-                    return True
+                score = tracker.get_relationship_score(other_id, track=track)
+                if score is None or score < _FRIEND_MIN_SCORE:
+                    continue
+                other = manager.get(other_id)
+                if other is None or getattr(other, "is_dead", False):
+                    continue
+                theirs = _dynasty(other)
+                if own_id is not None and theirs is not None                         and str(getattr(theirs, "id", None)) == str(own_id):
+                    continue   # same family: not an outside alliance
+                return _name(other)
             except Exception:
                 continue
-    return False
-
-
-def _milestones(sim_info, record, dynasty):
-    known = record.setdefault("milestones", {})
-    if "heir" not in known and _has_heir(sim_info, dynasty):
-        known["heir"] = _today()
-        atr_log.log("milestone for {}: heir".format(_name(sim_info)))
-    if "career_peak" not in known and _has_career_peak(sim_info, dynasty):
-        known["career_peak"] = _today()
-        atr_log.log("milestone for {}: career_peak".format(_name(sim_info)))
-    return set(known)
+    except Exception:
+        atr_log.log_exception("reading dynasty friends")
+    return None
 
 
 def _metrics(sim_info):
     dynasty = _dynasty(sim_info)
     record = _record(sim_info, dynasty)
+    career = _noble_career(sim_info)
+    max_level = _max_level(career) if career is not None else 0
     return {
         "dynasty": dynasty,
         "record": record,
-        "wealth": _wealth(sim_info),
-        "generation": _generation(sim_info, record),
-        "alliances": _alliance_count(dynasty),
-        "milestones": _milestones(sim_info, record, dynasty),
+        "net_worth": _net_worth(sim_info),
+        "dynasty_friend": _dynasty_friend(sim_info),
     }
-
-
-def _is_head(sim_info, dynasty):
-    if dynasty is None:
-        return False
-    try:
-        return dynasty.get_head_sim_id() == sim_info.id
-    except Exception:
-        return False
 
 
 def _throne_empty(sim_info, career):
@@ -363,14 +300,10 @@ def _failures(sim_info, career, target, inherited=False):
     metrics = _metrics(sim_info)
     return missing(
         target, _max_level(career),
-        wealth=metrics["wealth"],
-        generation=metrics["generation"],
-        alliances=metrics["alliances"],
-        milestones=metrics["milestones"],
-        is_head=_is_head(sim_info, metrics["dynasty"]),
+        net_worth=metrics["net_worth"],
+        dynasty_friend=metrics["dynasty_friend"],
         throne_empty=_throne_empty(sim_info, career),
         inherited=inherited,
-        census_known=metrics["dynasty"] is not None,
         checks=_checks(),
     ), metrics
 
@@ -418,11 +351,13 @@ def _record_promotion(sim_info, level):
         record["best_level"] = max(int(record.get("best_level", -1)), int(level))
         record.setdefault("promotions", []).append({
             "day": _today(), "sim_id": getattr(sim_info, "id", None),
-            "sim": _name(sim_info), "level": int(level), "generation": metrics["generation"],
+            "sim": _name(sim_info), "level": int(level),
+            "net_worth": metrics["net_worth"], "friend": metrics["dynasty_friend"],
         })
         _save()
-        atr_log.log("promoted {} to noble level {} (generation {}, {} allies)".format(
-            _name(sim_info), level, metrics["generation"], metrics["alliances"]))
+        atr_log.log("promoted {} to noble level {} (net worth §{}, dynasty friend {})".format(
+            _name(sim_info), level, format_money(metrics["net_worth"]),
+            metrics["dynasty_friend"]))
     except Exception:
         atr_log.log_exception("recording a promotion")
 
@@ -475,19 +410,285 @@ else:
     _promote = _no_gate
 
 
+# --- Inviting fellow nobles ------------------------------------------------------------
+_INVITE_AFFORDANCE_ID = 16404971447273659384   # fnv64(name) with the high bit set
+_INVITE_GUESTS = 3   # a gathering: two or three people, not an empty hall
+
+
+def _noble_level_of(sim_info):
+    """The Sim's Noble career level, or None when they hold no title."""
+    career = _noble_career(sim_info)
+    if career is None:
+        return None
+    try:
+        level = _level(career)
+    except Exception:
+        atr_log.log_exception("reading a noble level")
+        return None
+    return level or None
+
+
+def _sims_by_rank(sim_info, level):
+    """Every other noble in the save, as [(sim_info, level)]; noble_guests trims the list."""
+    rows = []
+    manager = getattr(services, "sim_info_manager", None)
+    if manager is None:
+        return rows
+    for other in manager().values():
+        if other is sim_info:
+            continue
+        try:
+            other_level = _noble_level_of(other)
+        except Exception:
+            continue
+        if other_level:
+            rows.append((other, other_level))
+    return noble_guests(rows, level)
+
+
+def _dynasty_guests(sim_info):
+    """Kin from the Sim's dynasty, used when there is no other noble to call.
+
+    With the pack's noble NPCs not in the save yet there may be nobody at or below the
+    Sim's rank, so the invitation falls back to their dynasty. If the Sim belongs to no
+    dynasty, every dynasty is considered.
+    """
+    members = []
+    try:
+        service = services.dynasty_service()
+        own = _dynasty(sim_info)
+        dynasties = [own] if own is not None else list(service.get_all_dynasties().values())
+        seen = set()
+        for dynasty in dynasties:
+            for sim_id in dynasty.get_members():
+                if sim_id == sim_info.id or sim_id in seen:
+                    continue
+                member = service and services.sim_info_manager().get(sim_id)
+                if member is None:
+                    continue
+                seen.add(sim_id)
+                members.append((member, _noble_level_of(member)))
+    except Exception:
+        atr_log.log_exception("gathering dynasty members")
+    return members
+
+
+def _summon(sim_infos, host_sim_info):
+    """Bring sims to the current lot. False when there is no venue to bring them to."""
+    venue = services.get_current_venue()
+    if venue is None:
+        return False
+    from venues.venue_constants import NPCSummoningPurpose
+    venue.summon_npcs(tuple(sim_infos), NPCSummoningPurpose.DEFAULT, host_sim_info)
+    return True
+
+
+def invite_fellow_nobles(sim_info):
+    """Calls two or three people to the lot. Returns (count, message).
+
+    Rank comes first: the most senior nobles at or below the Sim's own rank, highest rank
+    first, and a higher-ranked noble never answers a lower one. If that is not enough to
+    make a gathering, the Sim's dynasty fills the rest (never anyone above the Sim's rank),
+    which is what makes this useful before the pack's noble NPCs exist in a save. Sims are
+    never invented - if the save has nobody to call, it says so.
+    """
+    level = _noble_level_of(sim_info)
+    if level is None:
+        return 0, "Only a noble can invite fellow nobles."
+    # Rank decides first: the most senior nobles at or below the Sim's own rank, then
+    # dynasty kin only to fill the room. A dynasty member above the Sim's rank never comes,
+    # and a titled one is already in the noble list.
+    nobles = sorted(_sims_by_rank(sim_info, level), key=lambda pair: -(pair[1] or 0))
+    guests = list(nobles[:_INVITE_GUESTS])
+    chosen = {guest.id for guest, _ in guests}
+    if len(guests) < _INVITE_GUESTS:
+        for member, member_level in _dynasty_guests(sim_info):
+            if len(guests) >= _INVITE_GUESTS:
+                break
+            if member.id in chosen:
+                continue
+            if member_level is not None and member_level > level:
+                continue
+            chosen.add(member.id)
+            guests.append((member, member_level))
+    if not guests:
+        return 0, "There is no other noble at your rank or below, and no dynasty to call on."
+    if not _summon([guest for guest, _ in guests], sim_info):
+        return 0, "You need to be on a lot to invite anyone."
+    nobles_called = sum(1 for guest, _ in guests if _noble_level_of(guest) is not None)
+    names = ", ".join(_name(guest) for guest, _ in guests)
+    atr_log.log("invited {} for {} ({} noble(s), {} dynasty)".format(
+        names, _name(sim_info), nobles_called, len(guests) - nobles_called))
+    if len(guests) == 1:
+        return 1, "Only {} could come: {}. There is nobody else at your rank or below.".format(
+            names, "a noble" if nobles_called else "a dynasty member")
+    return len(guests), "Invited {} ({} noble(s), {} from your dynasty).".format(
+        names, nobles_called, len(guests) - nobles_called)
+
+
+_THRONE_INTERACTION = 471359   # EP21's generic_Throne: every throne runs it
+_throne_logged = False
+
+
+def _is_throne(obj):
+    """EP21's thrones, matched by their tuning name or by the throne interaction they all run.
+
+    The name test alone is brittle (the object definitions are named things like
+    object_NobleCareer_ThroneG...), so the interaction is the real signal.
+    """
+    definition = getattr(obj, "definition", None)
+    name = getattr(definition, "name", None) or ""
+    if "throne" in str(name).lower():
+        return True
+    for affordance in getattr(obj, "_super_affordances", ()) or ():
+        if getattr(affordance, "guid64", None) == _THRONE_INTERACTION:
+            return True
+    return False
+
+
+def _invite_affordance():
+    from sims4.resources import Types
+    return services.get_instance_manager(Types.INTERACTION).get(_INVITE_AFFORDANCE_ID)
+
+
+def _install_throne_affordance():
+    """Adds Invite Fellow Nobles to every throne definition.
+
+    Wrapping ScriptObject.potential_interactions turned out not to be on the path the pie
+    menu takes for a throne, so the affordance is put on the tuning instead: the same place
+    EA's own super affordances live, which the menu reads either way.
+    """
+    affordance = _invite_affordance()
+    if affordance is None:
+        atr_log.log("throne: Invite Fellow Nobles tuning not loaded (is the package installed?)")
+        return
+    manager = services.definition_manager()
+    patched = []
+    for cls in getattr(manager, "types", {}).values():
+        name = str(getattr(cls, "__name__", ""))
+        if "throne" not in name.lower() or "light" in name.lower():
+            continue
+        try:
+            existing = tuple(getattr(cls, "_super_affordances", ()) or ())
+            if affordance in existing:
+                continue
+            cls._super_affordances = existing + (affordance,)
+            patched.append(name)
+        except Exception:
+            atr_log.log_exception("adding the throne affordance to {}".format(name))
+    # Objects already on the lot were built before the tuning changed.
+    try:
+        for obj in services.object_manager().values():
+            definition = getattr(obj, "definition", None)
+            if "throne" in str(getattr(definition, "__name__", "")).lower():
+                existing = tuple(getattr(obj, "_super_affordances", ()) or ())
+                if affordance not in existing:
+                    obj._super_affordances = existing + (affordance,)
+    except Exception:
+        atr_log.log_exception("adding the throne affordance to objects on the lot")
+    atr_log.log("throne: Invite Fellow Nobles added to {} definition(s): {}".format(
+        len(patched), ", ".join(patched[:3]) or "none"))
+    try:
+        commands = [getattr(extra, "command", None)
+                    for extra in getattr(affordance, "basic_extras", ())]
+        atr_log.log("throne: affordance {} extras commands: {}".format(
+            getattr(affordance, "__name__", affordance), commands))
+    except Exception:
+        atr_log.log_exception("reading the affordance's extras")
+
+
+def _wrap_zone_load():
+    """Runs the throne patch once a save has loaded.
+
+    Called at script load, the interaction lookup fails: tuning is still being loaded
+    incrementally, so manager.get() returns None and the affordance would never be added.
+    """
+    from zone import Zone
+    current = Zone.on_loading_screen_animation_finished
+    original = getattr(current, _ORIGINAL_ATTR, current)
+
+    def on_loading_screen_animation_finished(self, *args, **kwargs):
+        result = original(self, *args, **kwargs)
+        try:
+            _install_throne_affordance()
+            active = services.active_sim_info()
+            if active is not None:
+                _push_panel_status(active)
+        except Exception:
+            atr_log.log_exception("installing the throne affordance after the zone loaded")
+        return result
+
+    setattr(on_loading_screen_animation_finished, _ORIGINAL_ATTR, original)
+    Zone.on_loading_screen_animation_finished = on_loading_screen_animation_finished
+    atr_log.log("throne patch armed for zone load")
+
+
+# --- Career panel status ---------------------------------------------------------------
+_PANEL_SAVINGS = re.compile(r"HouseRules_NobleSavings_Level(\d+)$")
+
+
+def _push_panel_status(sim_info):
+    """Tells the client what the panel's rows should read, and returns how many it pushed.
+
+    The career panel draws its requirement rows from GoalsStatusUpdate, which is built from
+    objective state - not from a test. A row with no test therefore sits at the default
+    0/1. Pushing the values ourselves ticks the row when the requirement is met, and for
+    money prints "§current / §goal" instead of a bare count. Nothing here touches the gate:
+    atr_logic still decides promotions.
+    """
+    career = _noble_career(sim_info)
+    if career is None:
+        return 0
+    tracker = getattr(sim_info, "aspiration_tracker", None)
+    aspiration = getattr(career.current_level_tuning, "aspiration", None)
+    if tracker is None or aspiration is None:
+        return 0
+    max_level = _max_level(career)
+    net_worth = _net_worth(sim_info)
+    friend = _dynasty_friend(sim_info)
+    throne = _throne_empty(sim_info, career)
+    pushed = 0
+    for objective in getattr(aspiration, "objectives", ()) or ():
+        name = str(getattr(objective, "__name__", ""))
+        goal = None
+        current, is_money, progress = 0, False, False
+        match = _PANEL_SAVINGS.match(name)
+        if match:
+            rank = rank_for_level(int(match.group(1)), max_level)
+            goal, current, is_money, progress = rank.net_worth, net_worth, True, True
+        elif name.startswith("HouseRules_NobleFriend"):
+            goal, current = 1, (1 if friend else 0)
+        elif name.startswith("HouseRules_NobleMonarch"):
+            goal, current = 1, (1 if throne else 0)
+        if goal is None:
+            continue   # EA's own rows (Charisma) are the game's business
+        try:
+            tracker.update_objective(objective, min(int(current), int(goal)), int(goal),
+                                     is_money, progress)
+            pushed += 1
+        except Exception:
+            atr_log.log_exception("pushing panel status for {}".format(name))
+    if pushed:
+        try:
+            tracker.send_if_dirty()
+        except Exception:
+            atr_log.log_exception("sending panel status")
+        atr_log.log("panel status pushed for {}: {} row(s)".format(_name(sim_info), pushed))
+    return pushed
+
+
 # --- Reporting and cheats --------------------------------------------------------------
 def _summary_lines(sim_info):
     career = _noble_career(sim_info)
     metrics = _metrics(sim_info)
     record = metrics["record"]
+    friend = metrics["dynasty_friend"] or "none"
     lines = [
         "Ascent to Royalty: {} (EP21 {})".format(
             "on" if _settings().get("enabled", True) else "off",
             "found" if _ACTIVE else "not installed - inactive"),
-        "Dynasty: {} [{}], generation {}, wealth §{}, alliances {}".format(
-            record.get("name") or "?", record["key"], metrics["generation"],
-            format_money(metrics["wealth"]), metrics["alliances"]),
-        "Milestones: {}".format(", ".join(sorted(metrics["milestones"])) or "none yet"),
+        "Dynasty: {} [{}], net worth §{}, friend in a dynasty: {}".format(
+            record.get("name") or "?", record["key"], format_money(metrics["net_worth"]), friend),
     ]
     if career is None:
         lines.append("Selected Sim is not in the Noble career.")
@@ -501,15 +702,55 @@ def _summary_lines(sim_info):
         return lines
     target = current + 1
     found, _ = _failures(sim_info, career, target)
-    nxt = rank_for_level(target, max_level)
     lines.append("Next: {} (level {})".format(rank_title(target, max_level), target))
     if found:
         lines.append("  missing: " + failure_text(found))
     else:
         lines.append("  ready: nothing is missing")
     if is_crown(target, max_level):
-        lines.append("  crown: head={}, throne vacant={}".format(
-            _is_head(sim_info, metrics["dynasty"]), _throne_empty(sim_info, career)))
+        lines.append("  crown: throne vacant={}".format(_throne_empty(sim_info, career)))
+    return lines
+
+
+_KIND_LABELS = {"net_worth": "Net worth", "friend": "Friendship", "monarch": "Monarchy"}
+
+
+def _requirement_lines(sim_info):
+    """The next rank and every requirement for it, met or not.
+
+    The gate only reports what is missing (missing()); this is the player-facing list shown
+    by houserules.royalty.requirements and in the career panel.
+    """
+    career = _noble_career(sim_info)
+    if career is None:
+        return ["The selected Sim is not in the Noble career."]
+    max_level = _max_level(career)
+    current = _level(career)
+    if current >= max_level:
+        return ["{} already holds the crown (level {}).".format(_name(sim_info), current)]
+    target = min(max_level, current + 1)
+    metrics = _metrics(sim_info)
+    rows = requirements(
+        target, max_level,
+        net_worth=metrics["net_worth"],
+        dynasty_friend=metrics["dynasty_friend"],
+        throne_empty=_throne_empty(sim_info, career),
+        checks=_checks(),
+    )
+    lines = ["{}: {} (level {})".format(
+        _name(sim_info), rank_title(target, max_level, getattr(sim_info, "is_female", False)),
+        target)]
+    for row in rows:
+        lines.append("  [{}] {}: {}".format("met" if row.met else "needs",
+                                            _KIND_LABELS.get(row.kind, row.kind), row.text))
+    still = [row for row in rows if not row.met]
+    if not rows:
+        lines.append("  no requirements (the gate is switched off).")
+    elif not still:
+        lines.append("  ready: every requirement is met.")
+    else:
+        lines.append("  still needed: " + ", ".join(
+            "{} {}".format(_KIND_LABELS.get(row.kind, row.kind), row.text) for row in still))
     return lines
 
 
@@ -560,6 +801,53 @@ def royalty_check(opt_sim: OptionalSimInfoParam = None, _connection=None):
         output("royalty.check failed - see the log.")
 
 
+@sims4.commands.Command("houserules.royalty.requirements", command_type=sims4.commands.CommandType.Live)
+def royalty_requirements(opt_sim: OptionalSimInfoParam = None, _connection=None):
+    """Every requirement for the next rank, met or not."""
+    output = sims4.commands.CheatOutput(_connection)
+    sim_info = _opt_sim(opt_sim, _connection)
+    if sim_info is None:
+        output("No Sim found (select one or pass a sim id).")
+        return
+    try:
+        for line in _requirement_lines(sim_info):
+            output(line)
+            atr_log.log("requirements " + line)
+    except Exception:
+        atr_log.log_exception("royalty.requirements")
+        output("royalty.requirements failed - see the log.")
+
+
+@sims4.commands.Command("houserules.royalty.tuning", command_type=sims4.commands.CommandType.Live)
+def royalty_tuning(_connection=None):
+    """Diagnostic: the aspiration the career panel is using, and whether our tuning loaded."""
+    output = sims4.commands.CheatOutput(_connection)
+    sim_info = _active_sim_or_output(output)
+    if sim_info is None:
+        return
+    career = _noble_career(sim_info)
+    if career is None:
+        output("The selected Sim is not in the Noble career.")
+        return
+    try:
+        aspiration = getattr(career.current_level_tuning, "aspiration", None)
+        output("level {} aspiration: {}".format(
+            _level(career), "none" if aspiration is None else getattr(aspiration, "guid64", "?")))
+        for objective in getattr(aspiration, "objectives", ()) or ():
+            test = getattr(objective, "objective_test", None)
+            output("  objective {} {} (test: {})".format(
+                getattr(objective, "guid64", "?"), objective, type(test).__name__))
+        from sims4.resources import Types
+        for name, type_ in (("aspiration", Types.ASPIRATION), ("objective", Types.OBJECTIVE)):
+            manager = services.get_instance_manager(type_)
+            ids = {getattr(cls, "guid64", None) for cls in manager.types.values()}
+            output("{} manager: {} instances; 0x7F000001={} 0x7F000011={} 0x7F000021={}".format(
+                name, len(ids), 0x7F000001 in ids, 0x7F000011 in ids, 0x7F000021 in ids))
+    except Exception:
+        atr_log.log_exception("royalty.tuning")
+        output("royalty.tuning failed - see the log.")
+
+
 @sims4.commands.Command("houserules.royalty.levels", command_type=sims4.commands.CommandType.Live)
 def royalty_levels(_connection=None):
     """The native noble ladder and the gate on each rung."""
@@ -576,12 +864,16 @@ def royalty_levels(_connection=None):
     output("Noble levels ({}):".format(len(levels)))
     for level in range(len(levels)):
         rank = rank_for_level(level, max_level)
-        output("  {}: {} - §{} | generation {} | {} alliance{} | {}".format(
-            level, rank_title(level, max_level), format_money(rank.wealth), rank.generation,
-            rank.alliances, "" if rank.alliances == 1 else "s",
-            ", ".join(rank.milestones) or "no milestones"))
-        atr_log.log("levels {}: {} §{} gen {} allies {}".format(
-            level, rank_title(level, max_level), rank.wealth, rank.generation, rank.alliances))
+        if level >= max_level:
+            next_gate = "no promotion (the crown)"
+        elif is_crown(level + 1, max_level):
+            next_gate = "no Monarch in the region"
+        else:
+            next_gate = "§{} net worth, a friend at {} or above".format(
+                format_money(rank_for_level(level + 1, max_level).net_worth),
+                rank_title(level, max_level))
+        output("  {}: {} - {}".format(level, rank_title(level, max_level), next_gate))
+        atr_log.log("levels {}: {} -> {}".format(level, rank_title(level, max_level), next_gate))
 
 
 @sims4.commands.Command("houserules.royalty.set", command_type=sims4.commands.CommandType.Live)
@@ -611,6 +903,86 @@ def royalty_off(_connection=None):
     _settings()["enabled"] = False
     _save()
     sims4.commands.CheatOutput(_connection)("Ascent to Royalty is off.")
+
+
+@sims4.commands.Command("houserules.royalty.panel", command_type=sims4.commands.CommandType.Live)
+def royalty_panel(_connection=None):
+    """Re-sends this Sim's requirement rows to the career panel."""
+    output = sims4.commands.CheatOutput(_connection)
+    sim_info = _active_sim_or_output(output)
+    if sim_info is None:
+        return
+    pushed = _push_panel_status(sim_info)
+    output("Panel rows updated: {}.".format(pushed) if pushed
+           else "This Sim has no Noble career panel to update.")
+
+
+@sims4.commands.Command("houserules.royalty.friends", command_type=sims4.commands.CommandType.Live)
+def royalty_friends(_connection=None):
+    """Why the dynasty-friend requirement is or isn't met, friend by friend."""
+    output = sims4.commands.CheatOutput(_connection)
+    sim_info = _active_sim_or_output(output)
+    if sim_info is None:
+        return
+    own = _dynasty(sim_info)
+    own_id = str(getattr(own, "id", None)) if own is not None else None
+    output("{} own dynasty: {} [{}]".format(
+        _name(sim_info), getattr(own, "name", None) or "none", own_id or "-"))
+    tracker = getattr(sim_info, "relationship_tracker", None)
+    if tracker is None:
+        output("No relationship tracker.")
+        return
+    try:
+        from relationships.relationship_track import RelationshipTrack
+        track = RelationshipTrack.FRIENDSHIP_TRACK
+    except Exception:
+        atr_log.log_exception("reading the friendship track")
+        return
+    manager = services.sim_info_manager()
+    rows = 0
+    for other_id in tracker.target_sim_gen():
+        if other_id == getattr(sim_info, "id", None):
+            continue
+        score = tracker.get_relationship_score(other_id, track=track)
+        if score is None or score < _FRIEND_MIN_SCORE:
+            continue
+        other = manager.get(other_id)
+        if other is None:
+            continue
+        theirs = _dynasty(other)
+        theirs_id = str(getattr(theirs, "id", None)) if theirs is not None else None
+        relation = "no dynasty"
+        if theirs is not None:
+            relation = "SAME dynasty" if (own_id is not None and theirs_id == own_id) else "other dynasty"
+        output("  {}: score {}, {} [{}] -> {}".format(
+            _name(other), int(score), getattr(theirs, "name", None) or "none",
+            theirs_id or "-", "counts" if relation != "SAME dynasty" else "excluded"))
+        rows += 1
+    if not rows:
+        output("No friends at {}+ on the friendship track.".format(_FRIEND_MIN_SCORE))
+    atr_log.log("friends check for {}: {} qualifying rows".format(_name(sim_info), rows))
+
+
+@sims4.commands.Command("houserules.royalty.invite", command_type=sims4.commands.CommandType.Live)
+def royalty_invite(opt_sim: OptionalTargetParam = None, _interaction_id: float = None, _connection=None):
+    """Run by the throne's Invite Fellow Nobles, and usable from the console.
+
+    A do_command element passes the participant target and an interaction id; a bare
+    (_connection) signature raises inside the command and the pie-menu click looks dead.
+    """
+    output = sims4.commands.CheatOutput(_connection)
+    atr_log.log("royalty.invite invoked")
+    try:
+        target = get_optional_target(opt_sim, _connection)
+        sim_info = getattr(target, "sim_info", target) or services.active_sim_info()
+        if sim_info is None:
+            output("No selected Sim.")
+            return
+        count, message = invite_fellow_nobles(sim_info)
+        output(message)
+        _notify("Invite Fellow Nobles", message, sim_info)
+    except Exception:
+        atr_log.log_exception("houserules.royalty.invite")
 
 
 @sims4.commands.Command("houserules.royalty.ally", command_type=sims4.commands.CommandType.Live)
@@ -673,7 +1045,7 @@ def royalty_grant(level: int = 0, _connection=None):
 
 @sims4.commands.Command("houserules.royalty.reset", command_type=sims4.commands.CommandType.Live)
 def royalty_reset(_connection=None):
-    """Forget this dynasty's recorded generation, milestones and promotions."""
+    """Forget this dynasty's recorded promotions."""
     output = sims4.commands.CheatOutput(_connection)
     sim_info = _active_sim_or_output(output)
     if sim_info is None:
@@ -686,4 +1058,44 @@ def royalty_reset(_connection=None):
     output("Progress for {} {}.".format(key, "cleared" if removed else "was not recorded"))
 
 
+if _ACTIVE:
+    try:
+        _wrap_zone_load()
+    except Exception:
+        atr_log.log_exception("arming the throne patch")
+
 atr_log.log("ascent_to_royalty loaded: {}".format("active" if _ACTIVE else "inactive (no EP21)"))
+
+
+# --- Panel tuning diagnostic ------------------------------------------------------------
+# The career panel's Savings row comes from tuning/NobleAspiration_Level*.xml and
+# tuning/NobleSavings_Level*.xml. Log whether those instances reached the game, so a build
+# that ignores XML tuning is visible in the log rather than only as a missing row.
+_NOBLE_ASPIRATION_LEVEL1 = 0x71D83
+_NOBLE_NET_WORTH_LEVEL1 = 2130706433
+
+
+def _log_panel_tuning():
+    if not _ACTIVE:
+        return
+    try:
+        from sims4.resources import Types
+
+        def find(manager, instance_id):
+            for cls in manager.types.values():
+                if getattr(cls, "guid64", None) == instance_id:
+                    return cls
+            return None
+
+        aspiration = find(services.get_instance_manager(Types.ASPIRATION), _NOBLE_ASPIRATION_LEVEL1)
+        objective = find(services.get_instance_manager(Types.OBJECTIVE), _NOBLE_NET_WORTH_LEVEL1)
+        objectives = getattr(aspiration, "objectives", None) if aspiration is not None else None
+        atr_log.log("panel tuning: aspiration {}, {} objective(s); net-worth objective {}".format(
+            "missing" if aspiration is None else "found",
+            "?" if objectives is None else len(objectives),
+            "missing" if objective is None else "found"))
+    except Exception:
+        atr_log.log_exception("checking the career-panel tuning")
+
+
+_log_panel_tuning()

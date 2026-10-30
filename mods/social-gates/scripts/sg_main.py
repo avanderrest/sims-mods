@@ -57,6 +57,11 @@ _sg_business_ui = False
 # members, so criteria validation is skipped for the duration.
 _sg_editing_club = False
 
+# True while a Club invitation is being offered or accepted. An invitation is a decision by
+# the inviter and the receiver, so the admission gate must not veto it - otherwise accepting
+# an invite silently does nothing.
+_sg_invite_accept = False
+
 
 @contextlib.contextmanager
 def _auto_validation():
@@ -626,6 +631,40 @@ def _club_gate_active(club):
         return False
 
 
+def _install_invite_accept_bypass():
+    """Lets an accepted Club invitation through the admission gate.
+
+    Invites arrive through drama nodes: ClubInviteDramaNode (an invite the Sim accepts) and
+    ClubInviteRequestDramaNode (the leader accepting a request). Both ask can_sim_info_join
+    before the dialogue is even shown, so the whole node is run with the gate relaxed.
+    """
+    try:
+        from drama_scheduler.club_invite_drama_node import (ClubInviteDramaNode,
+                                                            ClubInviteRequestDramaNode)
+    except Exception:
+        sg_log.log_exception("importing the club invite drama nodes")
+        return
+    for node in (ClubInviteDramaNode, ClubInviteRequestDramaNode):
+        for name in ("_test_club", "_run_club_behavior"):
+            current = getattr(node, name, None)
+            if current is None:
+                continue
+            original = getattr(current, "_sg_original", current)
+
+            def wrapper(self, *args, **kwargs):
+                global _sg_invite_accept
+                previous = _sg_invite_accept
+                _sg_invite_accept = True
+                try:
+                    return original(self, *args, **kwargs)
+                finally:
+                    _sg_invite_accept = previous
+
+            wrapper._sg_original = original
+            setattr(node, name, wrapper)
+    sg_log.log("club: invitations bypass the admission gate")
+
+
 def _install_club_gates():
     from clubs.club import Club
     from clubs.club_service import ClubService
@@ -635,6 +674,8 @@ def _install_club_gates():
 
     def add_member(self, member, distribute=True):
         try:
+            if _sg_invite_accept:
+                return original_add_member(self, member, distribute)
             if (member is not None and self.leader is not member and _club_gate_active(self)
                     and not _club_exempt(member, self)):
                 ok, reason = _admission_result(member, self)
@@ -657,6 +698,8 @@ def _install_club_gates():
 
     def can_sim_info_join(self, new_sim_info):
         try:
+            if _sg_invite_accept:
+                return original_can_join(self, new_sim_info)
             if (new_sim_info is not None and self.leader is not new_sim_info
                     and _club_gate_active(self) and not _club_exempt(new_sim_info, self)):
                 ok, reason = _admission_result(new_sim_info, self)
@@ -713,7 +756,10 @@ def _install_club_gates():
         try:
             club = _criteria_club(self)
             if not getattr(self, "_sg_business", False) and _relative_wealth_applies(club):
-                if sim_info is not None and sim_info is getattr(club, "leader", None):
+                # The leader's household shares the leader's net worth, so a relative
+                # "richer than the leader" band could never include them. The same circle
+                # that is exempt when joining and never removed is exempt here too.
+                if sim_info is not None and _club_exempt(sim_info, club):
                     return True
                 return in_wealth_range(
                     self.household_value, _net_worth(sim_info),
@@ -1032,6 +1078,7 @@ def _install():
         sg_log.log_exception("installing invite gate")
     try:
         _install_club_gates()
+        _install_invite_accept_bypass()
     except Exception:
         sg_log.log_exception("installing club gates")
     try:

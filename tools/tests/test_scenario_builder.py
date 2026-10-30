@@ -85,3 +85,24 @@ def test_bad_json_is_a_400_with_errors(server):
     status, body = request(server + "/api/validate", {"text": "{not json"})
     assert status == 400
     assert json.loads(body)["errors"]
+
+
+def test_page_offers_eas_scenario_icons_by_name(server):
+    status, body = request(server + "/api/state")
+    state = json.loads(body)
+    icons = state["meta"]["icons"]
+    names = [icon["name"] for icon in icons]
+    assert "scenario_RomCom" in names
+    assert "headline_Scenario_TooManyToddlers" in names
+    # names and paths only: the images stay in the game
+    assert all(set(icon) == {"name", "path"} for icon in icons)
+    assert state["meta"]["default_icon"] == "headline_Scenario_TooManyToddlers"
+
+
+def test_requires_is_picked_from_the_other_goal_ids(server):
+    # `requires` is a list of goal ids, so the form offers them as checkboxes instead of a
+    # comma-separated text field.
+    status, page = request(server + "/")
+    assert status == 200
+    assert "requiresInput(g, i)" in page
+    assert "'input[type=\"checkbox\"]:checked'" in page

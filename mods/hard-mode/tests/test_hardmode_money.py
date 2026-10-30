@@ -2,8 +2,7 @@ import pytest
 
 from hardmode_money import (DEBT_LATE_FEE, KIND_MULTIPLIERS, SATURATION_FLOOR, MarketLedger, bill_to_debt,
                             credit_limit, daily_debt_step, household_size_bill_factor, item_kind, markup_curve,
-                            markup_satisfaction_factor, markup_scale, repay_debt, repay_options, sell_multiplier,
-                            starting_funds_cut)
+                            markup_satisfaction_factor, markup_scale, repay_debt, repay_options, sell_multiplier)
 
 
 # --- item kinds (tag names as they appear in the game's tuning) ---
@@ -154,13 +153,6 @@ def test_daily_debt_step_pays_off_small_debt():
 
 def test_daily_debt_step_without_debt():
     assert daily_debt_step(0, 1000) == (0, 0)
-
-
-def test_starting_funds_cut():
-    assert starting_funds_cut(20000, 10000) == 10000
-    assert starting_funds_cut(3000, 10000) == 3000  # spent most on a lot: never below 0
-    assert starting_funds_cut(20000, 20000) == 0
-    assert starting_funds_cut(20000, 0) == 20000
 
 
 def test_repay_options_are_affordable_steps_then_the_most_possible():

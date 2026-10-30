@@ -10,6 +10,8 @@ Only what the game's situation-goal tuning can express is exported. Everything e
 deadlines, custom goals) is reported in `warnings` and stays with the script mod. References
 to EA tuning are written by *name* (`Skill_Painting`, `trait_Ambitious`), which the game
 resolves with the same name hash it uses for instance ids.
+
+Our own cross-references are written as instance ids, not names: see ref() and AGENTS.md.
 """
 import json
 import re
@@ -17,6 +19,7 @@ from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
 
 import config
+import scenario_icons
 import tuning
 
 SCENARIO_DIR = config.MODS_SRC_DIR / "scenarios" / "install" / "scenarios"
@@ -70,8 +73,24 @@ def slugify(text):
 
 
 def tuning_id(name):
-    """Instance id for our own tuning: the game hashes names with the high bit set."""
-    return tuning.fnv64(name) | (1 << 63)
+    """Instance id for our own tuning: 32-bit FNV with the high bit set.
+
+    Scenario ids have to fit in 32 bits. The client builds the scenario list from them, and
+    a 64-bit id - the normal choice for custom tuning - is simply not seen there: the tuning
+    loads on the server (which is Python) and never appears in the menu. This was the note
+    going round when scenarios shipped: "they have to be 32 Bit to be displayed correctly".
+    """
+    return tuning.fnv32(name) | 0x80000000
+
+
+def ref(name):
+    """A reference to one of our own tunings, written as its instance id.
+
+    EA's own tuning writes ids here (`<T n="starting_phase">336506</T>`), not names. The
+    game resolves a name with Key.hash64, whose hash does not match the ids we put on our
+    instances, so a name would be an UnavailablePackSafeResourceError at load time.
+    """
+    return str(tuning_id(name))
 
 
 def loc(text):
@@ -214,10 +233,19 @@ def _goal_body(goal, warnings, unsupported):
     return None
 
 
+PRIMARY_SIM_ROLE = 273416   # EA's scenarioRole_PrimarySim, the role scenario_role_data uses
+
+
 def _goal_instance(name, goal, warnings, unsupported):
     display_title = _goal_display_text(goal)
+    # A goal has to say which scenario role it belongs to, or the scenario has no role that
+    # can complete it and the card never appears. Working scenario mods all carry this.
+    roles = [_line(1, '<L n="_scenario_roles">'),
+             _line(2, "<T>%d</T>" % PRIMARY_SIM_ROLE),
+             _line(1, "</L>")]
     if goal.get("type") == "day":
         body = [_t(1, "duration", int(float(goal.get("day", 1)) * 24))]
+        body += roles
         body += _display(1, display_title)
         return _instance("SituationGoalTime", TYPE_SITUATION_GOAL,
                          "situations.situation_goal_time", name, body)
@@ -226,6 +254,7 @@ def _goal_instance(name, goal, warnings, unsupported):
     if goal_body is None:
         return None
     body = [_line(1, line) for line in goal_body]
+    body += roles
     body += _display(1, display_title)
     return _instance("SituationGoalActor", TYPE_SITUATION_GOAL,
                      "situations.situation_goal_actor", name, body)
@@ -274,7 +303,7 @@ def _scenario_loot_list(level, name, loot_name):
     return [_line(level, "<L n=%s>" % quoteattr(name)),
             _line(level + 1, "<U>"),
             _line(level + 2, '<U n="scenario_loot">'),
-            _t(level + 3, "loot_action", escape(loot_name)),
+            _t(level + 3, "loot_action", ref(loot_name)),
             _line(level + 2, "</U>"),
             _line(level + 1, "</U>"),
             _line(level, "</L>")]
@@ -388,12 +417,6 @@ def render(scenario, slug=None):
         return _instance("ScenarioOutcome", TYPE_SNIPPET,
                          "gameplay_scenarios.scenario_outcomes", name, body)
 
-    files[win_outcome] = outcome_xml(win_outcome, win_text,
-                                     win_outcome + "_Loot" if win_ops else None)
-    files[lose_outcome] = outcome_xml(lose_outcome, lose_text,
-                                      lose_outcome + "_Loot" if lose_ops else None)
-    files.update(loot_files)
-
     start = scenario.get("start") or {}
     start_ops = _start_ops(start, warnings, unsupported)
     start_loot_name = None
@@ -413,65 +436,83 @@ def render(scenario, slug=None):
         if reward_ops:
             goal_loot_name = goal_name + "_Loot"
             files[goal_loot_name] = _loot_instance(goal_loot_name, reward_ops)
-        phase_goals.append((goal_name, goal_loot_name))
+        phase_goals.append((goal_name, goal_loot_name, _goal_display_text(goal)))
 
     if not phase_goals:
         raise ExportError(
             "none of this scenario's goals can be exported to the menu; "
             "see the warnings for the types that have no equivalent")
 
-    body = ['  <T n="phase_objective">%s</T>' % loc(scenario.get("description") or scenario.get("name")),
-            '  <L n="goals">']
-    for goal_name, goal_loot_name in phase_goals:
-        body += ['    <U>',
-                 '      <L n="goal_sequence">',
-                 '        <U>',
-                 '          <U n="goal">',
-                 '            <T n="situation_goal">%s</T>' % escape(goal_name),
-                 '            <E n="required_pack">BASE_GAME</E>',
-                 '            <T n="mandatory">True</T>',
-                 '            <T n="hidden">False</T>']
-        if goal_loot_name:
-            body += _scenario_loot_list(6, "goal_loot", goal_loot_name)
-        else:
-            body += ['            <L n="goal_loot"/>']
-        body += ['            <L n="loot_on_instantiate"/>',
-                 '          </U>',
-                 '        </U>',
-                 '      </L>',
-                 '    </U>']
-    body += ['  </L>',
-             '  <U n="phase_fallback_output">',
-             '    <U n="output">',
-             '      <T n="scenario_outcome">%s</T>' % escape(win_outcome),
-             '      <U n="output_loot">',
-             '        <L n="loots"/>',
-             '      </U>',
-             '    </U>',
-             '  </U>',
-             '  <L n="phase_outputs"/>',
-             '  <L n="terminators"/>']
-    files[phase_name] = _instance("ScenarioPhase", TYPE_SNIPPET,
-                                  "gameplay_scenarios.scenario_phase", phase_name, body)
+    # NEW_HOUSEHOLD scenarios are built around CAS role data; an existing household needs
+    # none, which is what we can express. Either can be asked for with menu.entry_method.
+    entry_method = str(menu.get("entry_method") or "NEW_HOUSEHOLD").upper()
+    if entry_method not in ("NEW_HOUSEHOLD", "EXISTING_HOUSEHOLD"):
+        warnings.append("menu.entry_method {!r} is not NEW_HOUSEHOLD or EXISTING_HOUSEHOLD;"
+                        " using NEW_HOUSEHOLD".format(menu.get("entry_method")))
+        entry_method = "NEW_HOUSEHOLD"
+
+    # The card icon is a ResourceKey; `menu.icon` names one of EA's (tools/scenario_icons.py)
+    # or is a raw type:group:instance key. Only the key is what the game resolves; the path
+    # rides along because that is how EA's and third-party tunings spell it.
+    try:
+        icon_path, icon_key = scenario_icons.resolve(menu.get("icon"))
+    except scenario_icons.IconError as e:
+        raise ExportError(str(e))
+    icon_line = _t(1, "icon", icon_key)
+    if icon_path:
+        icon_line = "  <T n=\"icon\" p=%s>%s</T>" % (quoteattr(icon_path), icon_key)
 
     scenario_body = [
-        '  <E n="compatibility_with_scenario_entry_method">NEW_HOUSEHOLD</E>',
+        # TunableEnumFlags: a list of entries, not a single enum. Writing this as an <E>
+        # makes the loader reject the tuning, and the scenario never reaches the menu.
+        '  <L n="compatibility_with_scenario_entry_method">',
+        '    <E>%s</E>' % entry_method,
+        '    <E />',
+        '  </L>',
         _t(1, "scenario_name", loc(scenario.get("name") or base)),
         _t(1, "scenario_description", loc(scenario.get("description") or "")),
         _t(1, "tagline_text", loc(menu.get("tagline") or scenario.get("description") or "")),
-        '  <L n="scenario_tags"/>',
+        '  <L n="scenario_tags">',
+        '    <T>273407</T>',
+        '    <T>273404</T>',
+        '  </L>',
+        icon_line,
+        r'  <T n="reward_icon" '
+        r'p="InGame\UI\Icons\Headlines\Final\headline_satisfactionpoints.png">'
+        '2f7d0004:00000000:6b8081083aa523c1</T>',
+        _t(1, "reward_text", loc("Satisfaction Points")),
+        '  <V n="outcome_screen_background_image" t="enabled">',
+        r'    <T n="enabled" '
+        r'p="InGame\UI\Icons\DynamicSigns\Backgrounds\Scenarios_Outcome.png">'
+        '2f7d0004:00000000:6ae746d4a689dec7</T>',
+        '  </V>',
     ]
-    if menu.get("icon"):
-        scenario_body.append(_t(1, "icon", escape(str(menu["icon"]))))
     scenario_body += [
-        '  <L n="scenario_role_data"/>',
+        # The household flow reads the roles the scenario expects; without them a card has
+        # nothing to offer, so any household size is accepted with EA's primary Sim role.
+        '  <L n="scenario_role_data">',
+        '    <U>',
+        '      <T n="role">273416</T>',
+        '      <U n="sim_count">',
+        '        <T n="lower_bound">1</T>',
+        '        <T n="upper_bound">8</T>',
+        '      </U>',
+        '    </U>',
+        '  </L>',
         '  <L n="relationship_requirements"/>',
-        _t(1, "starting_phase", escape(phase_name)),
-        '  <L n="terminators"/>',
-        _t(1, "outcome_on_cancel", escape(lose_outcome)),
-        _t(1, "outcome_on_validation_failed", escape(lose_outcome)),
         '  <U n="loot_on_end"/>',
-        '  <L n="goals"/>',
+    ]
+    scenario_body.append('  <L n="goals">')
+    for goal_name, _goal_loot, goal_text in phase_goals:
+        scenario_body += [
+            '    <U>',
+            _t(2, "goal_description_text", loc(goal_text)),
+            _t(2, "goal_title_text", loc(goal_text)),
+            _t(2, "situation_goal", ref(goal_name)),
+            '    </U>',
+        ]
+    scenario_body.append('  </L>')
+    scenario_body += [
         _t(1, "household_money", int(start.get("money")) if isinstance(start.get("money"), (int, float)) else 20000),
         '  <L n="loot_on_scenario_start">',
         '    <U>',
@@ -480,7 +521,7 @@ def render(scenario, slug=None):
         '        <L n="household_loot">',
     ]
     if start_loot_name:
-        scenario_body.append(_line(5, "<T>%s</T>" % escape(start_loot_name)))
+        scenario_body.append(_line(5, "<T>%s</T>" % ref(start_loot_name)))
     scenario_body += [
         '        </L>',
         '        <L n="rel_loot"/>',
@@ -493,6 +534,12 @@ def render(scenario, slug=None):
     ]
     scenario_body += _start_notification(
         scenario.get("name") or base, "Your scenario has started.")
+    # EA's own scenario screen slam; every working scenario tuning carries one.
+    scenario_body += ['  <V n="screen_slam_scenario_completed" t="enabled">',
+                      '    <V n="enabled" t="reference">',
+                      '      <T n="reference">275669</T>',
+                      '    </V>',
+                      '  </V>']
     scenario_body += [_t(1, "ui_sort_order", int(menu.get("sort_order", 100)))]
 
     templates = []
@@ -507,10 +554,16 @@ def render(scenario, slug=None):
     difficulty = _menu_option(menu, "difficulty", warnings)
     if category:
         scenario_body.append(_e(1, "category", category))
+        if category not in tuning.SCENARIO_CATEGORY_VALUES:
+            warnings.append("menu.category {0!r} has no known client-binary value: "
+                            "the card will not list".format(category))
     else:
         warnings.append("menu.category is not set: the card may show under an unknown category")
     if difficulty:
         scenario_body.append(_e(1, "difficulty", difficulty))
+        if difficulty not in tuning.SCENARIO_DIFFICULTY_VALUES:
+            warnings.append("menu.difficulty {0!r} has no known client-binary value: "
+                            "the card will not list".format(difficulty))
     else:
         warnings.append("menu.difficulty is not set: the card may show as unknown difficulty")
 

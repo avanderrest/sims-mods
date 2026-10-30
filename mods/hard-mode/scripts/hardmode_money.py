@@ -222,16 +222,3 @@ def repay_debt(debt, funds, amount):
     Returns (new_debt, paid)."""
     paid = max(0, min(int(amount), debt, int(funds)))
     return debt - paid, paid
-
-
-# --- Starting funds -------------------------------------------------------------------
-GAME_STARTING_FUNDS = 20000
-
-
-def starting_funds_cut(current_funds, target_start):
-    """How much to take from a brand-new household so it starts with `target_start` instead
-    of the game's 20,000 (they may already have spent some on a lot: we take the difference,
-    never more than they have)."""
-    if target_start is None or target_start >= GAME_STARTING_FUNDS:
-        return 0
-    return int(max(0, min(current_funds, GAME_STARTING_FUNDS - target_start)))
