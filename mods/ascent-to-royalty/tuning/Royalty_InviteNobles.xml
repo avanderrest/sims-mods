@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Throne > "Invite Fellow Nobles".
+<!-- Throne > "Invite Dignitaries".
      Summons two or three living members of the dynasty closest in prestige to the acting
      Sim's; at Count (level 4) and above only royal dynasties are considered. A Sim with no
      dynasty gets the lowest-prestige dynasty. atr_main.py adds this affordance to throne
@@ -8,7 +8,7 @@
      s = fnv64("HouseRules_Royalty_InviteNobles") with the high bit set; INVITE_AFFORDANCE_ID
      in atr_main.py must match. -->
 <I c="ImmediateSuperInteraction" i="interaction" m="interactions.base.immediate_interaction" n="HouseRules_Royalty_InviteNobles" s="16404971447273659384">
-  <T n="display_name">{{string:Invite Fellow Nobles}}</T>
+  <T n="display_name">{{string:Invite Dignitaries}}</T>
   <T n="pie_menu_priority">1</T>
   <E n="target_type">OBJECT</E>
   <L n="basic_extras">

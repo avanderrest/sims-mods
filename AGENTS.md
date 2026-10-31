@@ -5,6 +5,7 @@ Sims 4 gameplay mods. Everything is built from source here; nothing is hand-edit
 ## Commands
 
 ```
+rebuild.cmd                                     # double-click: build everything, install, ready to play
 py -3.7 tools/build.py [mod …] [--no-install]   # tests, compiles, installs to Mods\HouseRules
 py -m pytest tools/tests mods/*/tests -q        # the whole suite (any Python 3.8+)
 ```

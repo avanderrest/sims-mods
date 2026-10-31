@@ -521,7 +521,7 @@ def _wrap_assignments():
     atr_log.log("daily noble check armed before duty handout")
 
 
-# --- Inviting fellow nobles ------------------------------------------------------------
+# --- Inviting dignitaries ------------------------------------------------------------
 _INVITE_AFFORDANCE_ID = 16404971447273659384   # fnv64(name) with the high bit set
 _INVITE_GUESTS = 3   # a gathering: two or three people, not an empty hall
 
@@ -602,16 +602,47 @@ def _living_members(dynasty, sim_info):
 
 
 def _summon(sim_infos, host_sim_info):
-    """Bring sims to the current lot. False when there is no venue to bring them to."""
+    """Bring sims to the current lot as guests. False when there is no venue to bring them to.
+
+    The venue's DEFAULT summoning (venue.summon_npcs) lets the venue decide what to do: on
+    some lots that spawns the Sim without putting them in a situation, so they walk to the
+    lot, find nothing holding them there and go straight home again - and one shared
+    situation means the extra guests never show. The game's own visit situation (the one
+    "ask to hang out" and "invite in" use) is made once per guest instead, so each of them
+    is held on the lot for the visit's full duration.
+    """
     venue = services.get_current_venue()
     if venue is None:
         return False
-    from venues.venue_constants import NPCSummoningPurpose
-    venue.summon_npcs(tuple(sim_infos), NPCSummoningPurpose.DEFAULT, host_sim_info)
-    return True
+    manager = services.get_zone_situation_manager()
+    unplaced = []
+    placed = 0
+    for sim_info in sim_infos:
+        situation_id = None
+        try:
+            situation_id = manager.create_visit_situation(sim_info)
+        except Exception:
+            atr_log.log_exception("summoning {}".format(_name(sim_info)))
+        if situation_id is None:
+            unplaced.append(sim_info)
+        else:
+            placed += 1
+    atr_log.log("summon: {} visit situation(s) for {} sim(s)".format(placed, len(sim_infos)))
+    if not unplaced:
+        return True
+    # No visit situation for these (a venue without one, or a busy manager). The venue's
+    # own summoning is the backstop: it at least spawns them on the lot.
+    try:
+        from venues.venue_constants import NPCSummoningPurpose
+        venue.summon_npcs(tuple(unplaced), NPCSummoningPurpose.DEFAULT, host_sim_info)
+        atr_log.log("summon: venue fallback for {}".format(
+            ", ".join(_name(sim_info) for sim_info in unplaced)))
+    except Exception:
+        atr_log.log_exception("falling back to the venue's summoning")
+    return placed > 0
 
 
-def invite_fellow_nobles(sim_info):
+def invite_dignitaries(sim_info):
     """Calls two or three people from the dynasty closest in prestige to the host.
 
     At Count (level 4) and above only royal dynasties are considered: a royal dynasty is
@@ -622,7 +653,7 @@ def invite_fellow_nobles(sim_info):
     """
     career = _noble_career(sim_info)
     if career is None:
-        return 0, "Only a noble can invite fellow nobles."
+        return 0, "Only a noble can invite dignitaries."
     level = _level(career)
     own, host_prestige, options, by_key = _invite_options(sim_info)
     royal_only = level >= 4
@@ -682,7 +713,7 @@ def _noble_career_test():
     """A test instance that only passes for a Sim in the Noble career.
 
     The affordance is installed on every throne, so without this a commoner would see
-    Invite Fellow Nobles and get the refusal only after clicking it.
+    Invite Dignitaries and get the refusal only after clicking it.
     """
     global _gate_test_class
     if _gate_test_class is None:
@@ -703,7 +734,7 @@ def _noble_career_test():
                             return TestResult.TRUE
                     except Exception:
                         continue
-                return TestResult(False, "Only a noble can invite fellow nobles.",
+                return TestResult(False, "Only a noble can invite dignitaries.",
                                   tooltip=(self.tooltip))
 
         _gate_test_class = InNobleCareerTest
@@ -719,13 +750,13 @@ def _gate_invite_affordance(affordance):
                 isinstance(test, _gate_test_class) for test in existing):
             return
         affordance.test_globals = TestList(existing + (_noble_career_test(),))
-        atr_log.log("throne: Invite Fellow Nobles is now limited to the Noble career")
+        atr_log.log("throne: Invite Dignitaries is now limited to the Noble career")
     except Exception:
-        atr_log.log_exception("gating Invite Fellow Nobles on the Noble career")
+        atr_log.log_exception("gating Invite Dignitaries on the Noble career")
 
 
 def _install_throne_affordance():
-    """Adds Invite Fellow Nobles to every throne definition.
+    """Adds Invite Dignitaries to every throne definition.
 
     Wrapping ScriptObject.potential_interactions turned out not to be on the path the pie
     menu takes for a throne, so the affordance is put on the tuning instead: the same place
@@ -733,7 +764,7 @@ def _install_throne_affordance():
     """
     affordance = _invite_affordance()
     if affordance is None:
-        atr_log.log("throne: Invite Fellow Nobles tuning not loaded (is the package installed?)")
+        atr_log.log("throne: Invite Dignitaries tuning not loaded (is the package installed?)")
         return
     _gate_invite_affordance(affordance)
     manager = services.definition_manager()
@@ -760,7 +791,7 @@ def _install_throne_affordance():
                     obj._super_affordances = existing + (affordance,)
     except Exception:
         atr_log.log_exception("adding the throne affordance to objects on the lot")
-    atr_log.log("throne: Invite Fellow Nobles added to {} definition(s): {}".format(
+    atr_log.log("throne: Invite Dignitaries added to {} definition(s): {}".format(
         len(patched), ", ".join(patched[:3]) or "none"))
     try:
         commands = [getattr(extra, "command", None)
@@ -1250,7 +1281,7 @@ def royalty_friends(_connection=None):
 
 @sims4.commands.Command("houserules.royalty.invite", command_type=sims4.commands.CommandType.Live)
 def royalty_invite(opt_sim: OptionalTargetParam = None, _interaction_id: float = None, _connection=None):
-    """Run by the throne's Invite Fellow Nobles, and usable from the console.
+    """Run by the throne's Invite Dignitaries, and usable from the console.
 
     A do_command element passes the participant target and an interaction id; a bare
     (_connection) signature raises inside the command and the pie-menu click looks dead.
@@ -1263,9 +1294,9 @@ def royalty_invite(opt_sim: OptionalTargetParam = None, _interaction_id: float =
         if sim_info is None:
             output("No selected Sim.")
             return
-        count, message = invite_fellow_nobles(sim_info)
+        count, message = invite_dignitaries(sim_info)
         output(message)
-        _notify("Invite Fellow Nobles", message, sim_info)
+        _notify("Invite Dignitaries", message, sim_info)
     except Exception:
         atr_log.log_exception("houserules.royalty.invite")
 

@@ -266,14 +266,16 @@ a reminder, not a progress bar - the panel cannot test net worth, a friend's dyn
 vacant throne, so nothing ticks there. Without the package the mod still works; the panel
 just keeps EA's requirement.
 
-**Inviting fellow nobles.** A noble can use a throne's **Invite Fellow Nobles**: two or
-three living members of the dynasty closest in prestige to their own are summoned to the
+**Inviting dignitaries.** A noble can use a throne's **Invite Dignitaries**: two or
+three living members of the dynasty closest in prestige to their own are invited to the
 lot. At Count (level 4) and above only royal dynasties are considered - a royal dynasty is
 one whose head holds a Noble title. A noble with no dynasty has no prestige to compare, so
 the lowest-prestige dynasty is called instead. The host's own dynasty is not called unless
-it is the only one in the save. The option only appears for Sims in the Noble career. That is
-the quickest way to build the friendships a promotion asks for. `houserules.royalty.invite`
-does the same from the cheat console, which is also how to test it without owning a throne.
+it is the only one in the save. The option only appears for Sims in the Noble career. Each
+guest gets the game's own visit situation (the one "ask to hang out" uses), so they arrive
+and stay for the visit rather than turning round at the gate. That is the quickest way to
+build the friendships a promotion asks for. `houserules.royalty.invite` does the same from
+the cheat console, which is also how to test it without owning a throne.
 
 ```
 houserules.royalty.status              this Sim, its rank and the next gate
