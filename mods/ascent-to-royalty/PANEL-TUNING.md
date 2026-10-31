@@ -2,7 +2,7 @@
 
 The career panel's promotion list is EA client tuning, so a script cannot fill it. Instead
 this mod overrides the requirement aspirations EA attaches to the Noble career levels, so
-each level's panel shows the same two requirements the script gate enforces.
+each level's panel shows the same requirements the script gate enforces.
 
 None of this needs Sims 4 Studio. `tools/build.py` compiles `tuning/` into the package.
 
@@ -30,7 +30,7 @@ resources in the installed game byte for byte.
 |---|---:|---|
 | `aspiration_nobleCareer_Level1` … `Level9` | 466307–466313, 466329, 466306 | SimData, group `0x00B6465D` + XML, group 0 |
 | `HouseRules_NobleSavings_Level1` … `Level8` | `0x7F000001` … `0x7F000008` | SimData, group `0x0069453E` + XML, group 0 |
-| `HouseRules_NobleFriend_Level1` … `Level8` | `0x7F000011` … `0x7F000018` | SimData, group `0x0069453E` + XML, group 0 |
+| `HouseRules_NobleFriend_Level1` … `Level7` | `0x7F000011` … `0x7F000017` | SimData, group `0x0069453E` + XML, group 0 |
 | `HouseRules_NobleMonarch` | `0x7F000021` | SimData, group `0x0069453E` + XML, group 0 |
 
 `tuning/NobleAspiration_Level*.xml` names the objectives each level's panel lists;
@@ -47,14 +47,14 @@ The game stores an objective's presentation in the per-tuning SimData and its te
 tuning resource (`0x62E94D38`). No package in the game — EA's or any mod's — carries an
 objective test in a per-tuning SimData, and a hand-made one is not something to guess at.
 
-So the rows are reminders: net worth, the dynastic friend and the vacant throne are all
+So the rows are reminders: net worth, the dynastic friendships and the vacant throne are all
 shown, and none of them can ever complete. `houserules.royalty.requirements` is the authority
 on what is actually met.
 
 The script pushes the current values before the day's duties and on zone load, so the panel
 does not sit at its default `0/1`. Money rows print `§current / §goal` (for example
-`§10,000 / §35,000`); the friend and throne rows show no count. `houserules.royalty.panel`
-re-pushes them on demand.
+`§10,000 / §35,000`), friendship rows print `current / required` (for example `1 / 2`), and
+the throne row shows no count. `houserules.royalty.panel` re-pushes them on demand.
 
 EA re-sends the rows itself on load and when a Sim is selected, so pushing once is not
 enough: `CareerTracker.activate_career_aspirations` and `AspirationTracker.update_objective`

@@ -1,9 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Overrides EP21's promotion aspiration attached to career_Noble_Level8.
-     The career panel lists the same two requirements the script enforces: net worth and a friend at the current rank or above. -->
+     From Duke there is no friendship requirement, so this level lists only net worth. -->
 <I c="AspirationCareer" i="aspiration" m="aspirations.aspiration_tuning" n="aspiration_nobleCareer_Level8" s="466329">
   <L n="objectives">
     <T>2130706440</T>
-    <T>2130706456</T>
   </L>
 </I>

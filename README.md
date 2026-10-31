@@ -243,12 +243,13 @@ requirements.
 - **Net worth.** Each rank asks for household net worth (funds plus home). The numbers follow
   the old savings ladder: §35,000 to become a Baronet, rising to §200,000 for Grand Duke.
 - **Dynastic friendships.** The Sim must be friends (friendship track 30 or above) with
-  someone **outside their own dynasty** - an outside alliance, at any rank. Only kin in the
-  Sim's own dynasty are excluded; a friend who belongs to no dynasty at all counts, which is
-  what makes this reachable, since the pack's noble NPCs have no dynasty record. Rank is not
-  consulted: a default save has barely any titled sims, so asking for a friend at your own
-  rank made promotion all but impossible. The promotion message and
-  `houserules.royalty.requirements` name the friend they have.
+  people **outside their own dynasty**, and the ask grows with the title: one dynasty member,
+  then two, one dynasty head, one member of a royal dynasty, two royal dynasty members, one
+  royal dynasty head, then two royal dynasty heads. A **royal dynasty** is one whose head
+  holds any Noble title. Friends with no dynasty record no longer count, and the promotion
+  to Grand Duke (level 8) has no friendship requirement. Kin in the Sim's own dynasty are
+  excluded while another dynasty exists; if it is the only dynasty in the save, its members
+  count. The promotion message and `houserules.royalty.requirements` name what is missing.
 - **The crown is monarchy only.** From Grand Duke, the only requirement is that the region has
   no Monarch. The pack's exclusive-level rule enforces the vacancy.
 - **Marriage and inheritance skip the grind.** A spouse or child who inherits or claims a
@@ -259,17 +260,20 @@ requirements.
 
 Requirements are visible in game through `houserules.royalty.requirements`. The career
 panel also lists them: `HouseRules_ascent-to-royalty.package` replaces the requirement
-aspiration for each Noble career level, so the panel shows the two rows the script checks
+aspiration for each Noble career level, so the panel shows the rows the script checks
 instead of EA's own Charisma requirement (level 1 keeps Charisma as well). Those rows are
-a reminder, not a progress bar - the panel cannot test net worth, a noble friend or a
+a reminder, not a progress bar - the panel cannot test net worth, a friend's dynasty or a
 vacant throne, so nothing ticks there. Without the package the mod still works; the panel
 just keeps EA's requirement.
 
-**Inviting fellow nobles.** A noble can use a throne's **Invite Fellow Nobles**: every
-noble in the save at their rank or below is summoned to the lot. A Duke's invitation reaches
-Dukes, Marquesses, Viscounts and down, never a knight who outranks them. That is the quickest
-way to build the noble friendships a promotion asks for. `houserules.royalty.invite` does the
-same from the cheat console, which is also how to test it without owning a throne.
+**Inviting fellow nobles.** A noble can use a throne's **Invite Fellow Nobles**: two or
+three living members of the dynasty closest in prestige to their own are summoned to the
+lot. At Count (level 4) and above only royal dynasties are considered - a royal dynasty is
+one whose head holds a Noble title. A noble with no dynasty has no prestige to compare, so
+the lowest-prestige dynasty is called instead. The host's own dynasty is not called unless
+it is the only one in the save. The option only appears for Sims in the Noble career. That is
+the quickest way to build the friendships a promotion asks for. `houserules.royalty.invite`
+does the same from the cheat console, which is also how to test it without owning a throne.
 
 ```
 houserules.royalty.status              this Sim, its rank and the next gate
@@ -278,7 +282,7 @@ houserules.royalty.requirements [sim]  every requirement for the next rank, met 
 houserules.royalty.levels              every native noble level and its gate
 houserules.royalty.on / .off
 houserules.royalty.set <kind> on|off   enabled, notify, net_worth, friend, monarch
-houserules.royalty.invite              summon the nobles at or below this Sim's rank
+houserules.royalty.invite              summon the closest-prestige dynasty's members
 houserules.royalty.ally <sim id>       form a native dynasty alliance (not part of the gate)
 houserules.royalty.grant <level>       force a noble level, bypassing the gate (testing)
 houserules.royalty.reset               forget this dynasty's recorded progress

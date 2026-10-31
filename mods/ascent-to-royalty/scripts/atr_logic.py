@@ -4,12 +4,14 @@ The game's Noble career promotes a Sim one level at a time. Before each promotio
 a rank from the level being moved to and list what the Sim is still missing. The game layer
 then asks the player-visible settings which kinds of requirement to enforce.
 
-The rules are simple: to move up, a Noble needs the next rank's net worth and a friendship
-with someone at their current rank or above. The final step (Grand Duke to Monarch) is only
-about the throne: there must be no Monarch in the region.
+The rules are simple: to move up, a Noble needs the next rank's net worth and the right
+number of friends outside their own dynasty. The friendship asks for more as the title
+rises: ordinary dynasty members first, then dynasty heads, then members and heads of royal
+dynasties. The final step (Grand Duke to Monarch) is only about the throne: there must be no
+Monarch in the region.
 
-Nothing here reads the save: callers pass net worth, the highest friend rank and the throne
-fact in. That keeps the whole rule set testable outside the game.
+Nothing here reads the save: callers pass net worth, the friend facts and the throne fact
+in. That keeps the whole rule set testable outside the game.
 """
 from collections import namedtuple
 
@@ -38,11 +40,40 @@ RANKS = (
 Failure = namedtuple("Failure", "kind text")
 # What requirements() reports: the same text, whether it is already met, and the kind.
 Requirement = namedtuple("Requirement", "kind text met")
+# One friend outside the Sim's own dynasty, with the facts the friendship ladder reads.
+# `head` means the friend is the head of their dynasty; `royal` means that dynasty is royal
+# (its head holds a Noble title).
+Friend = namedtuple("Friend", "name head royal")
 
 NET_WORTH = "net_worth"
 FRIEND = "friend"
 MONARCH = "monarch"
 CHECKS = (NET_WORTH, FRIEND, MONARCH)
+
+# Friend requirement by rung of the ladder (rank_index_for_level). None means no friendship
+# requirement at that rank.
+#   1 Baronet: one dynasty member       2 Baron: two dynasty members
+#   3 Viscount: one dynasty head        4 Count: one royal dynasty member
+#   5 Margrave: two royal members       6 Marquess: one royal dynasty head
+#   7 Duke: two royal dynasty heads     8 Grand Duke / 9 Monarch: no friendship requirement
+FRIEND_TIERS = {
+    1: ("member", 1),
+    2: ("member", 2),
+    3: ("head", 1),
+    4: ("royal_member", 1),
+    5: ("royal_member", 2),
+    6: ("royal_head", 1),
+    7: ("royal_head", 2),
+}
+
+# Singular and plural wording for each kind of friend.
+FRIEND_WORDING = {
+    "member": ("a dynasty member", "dynasty members"),
+    "head": ("a dynasty head", "dynasty heads"),
+    "royal_member": ("a royal dynasty member", "royal dynasty members"),
+    "royal_head": ("a royal dynasty head", "royal dynasty heads"),
+}
+
 
 
 def clamp_level(level, max_level):
@@ -86,15 +117,52 @@ def friend_title(friend_rank, female=False):
     return title_for(RANKS[index], female)
 
 
-def requirements(level, max_level, net_worth, dynasty_friend, throne_empty=True,
+def friend_requirement(level, max_level):
+    """(kind, count) for the promotion to `level`, or None when no friend is required."""
+    return FRIEND_TIERS.get(rank_index_for_level(level, max_level))
+
+
+def friend_counts(friends):
+    """How many friends satisfy each kind of the friendship ladder.
+
+    `friends` is an iterable of Friend. Everyone in it already belongs to a dynasty outside
+    the Sim's own, so a dynasty member is any entry; a head also counts as a member, and a
+    royal head also counts as a royal member.
+    """
+    counts = {"member": 0, "head": 0, "royal_member": 0, "royal_head": 0}
+    for friend in friends or ():
+        counts["member"] += 1
+        if friend.head:
+            counts["head"] += 1
+            if friend.royal:
+                counts["royal_head"] += 1
+        if friend.royal:
+            counts["royal_member"] += 1
+    return counts
+
+
+def friend_requirement_text(kind, count):
+    """The requirement without the current count: 'friends with 2 dynasty heads'."""
+    singular, plural = FRIEND_WORDING[kind]
+    if count == 1:
+        return "friends with {}".format(singular)
+    return "friends with {} {}".format(count, plural)
+
+
+def friend_text(kind, count, have):
+    """The player-facing line for one kind of friend requirement."""
+    return "{} (have {})".format(friend_requirement_text(kind, count), have)
+
+
+def requirements(level, max_level, net_worth, friends=None, throne_empty=True,
                  inherited=False, checks=None):
     """Every requirement for the promotion to `level`, met or not.
 
-    `net_worth` is the household's total worth; `dynasty_friend` is the name of a friend
-    outside the Sim's own dynasty (None when there is none). Rank no longer enters the
-    friendship rule: too few sims in a default save hold a title, and a friend from outside
-    the family is an alliance worth having. For the crown the only requirement is that no higher rank
-    (another Monarch) is in the region.
+    `net_worth` is the household's total worth; `friends` is the list of friends outside the
+    Sim's own dynasty (see Friend). The friendship ladder asks for more at each rung: one
+    dynasty member, two, one dynasty head, one royal dynasty member, two, one royal dynasty
+    head, two. From Grand Duke to Monarch there is no friendship requirement, only the
+    vacant throne.
 
     This is the player-facing view (the career panel and the requirements command list all
     of these); the gate itself only needs missing(). `checks` is the set of kinds to include
@@ -114,15 +182,16 @@ def requirements(level, max_level, net_worth, dynasty_friend, throne_empty=True,
         have = net_worth or 0
         found.append(Requirement(NET_WORTH, "§{} net worth (have §{})".format(
             format_money(rank.net_worth), format_money(have)), have >= rank.net_worth))
-    if FRIEND in checks:
-        found.append(Requirement(
-            FRIEND,
-            "a friend outside your dynasty (have: {})".format(dynasty_friend or "none"),
-            bool(dynasty_friend)))
+    need = friend_requirement(level, max_level)
+    if FRIEND in checks and need is not None:
+        kind, count = need
+        counts = friend_counts(friends)
+        have = counts[kind]
+        found.append(Requirement(FRIEND, friend_text(kind, count, have), have >= count))
     return found
 
 
-def missing(level, max_level, net_worth, dynasty_friend, throne_empty=True,
+def missing(level, max_level, net_worth, friends=None, throne_empty=True,
             inherited=False, checks=None):
     """Everything still missing for the promotion to `level`.
 
@@ -134,7 +203,7 @@ def missing(level, max_level, net_worth, dynasty_friend, throne_empty=True,
     passed when it did not. The gate is on the earned promotion path only.
     """
     return [Failure(row.kind, row.text) for row in requirements(
-        level, max_level, net_worth, dynasty_friend, throne_empty=throne_empty,
+        level, max_level, net_worth, friends=friends, throne_empty=throne_empty,
         inherited=inherited, checks=checks) if not row.met]
 
 
@@ -154,14 +223,23 @@ def format_money(value):
         return str(value)
 
 
-def noble_guests(nobles, my_level):
-    """The nobles who answer a summon from a Sim at `my_level`: that rank or below.
+# A dynasty the host can invite from: `prestige` is the pack's dynasty prestige and
+# `royal` is true when its head holds a Noble title.
+InviteDynasty = namedtuple("InviteDynasty", "key prestige royal")
 
-    `nobles` is an iterable of (sim_info, level). A higher-ranked noble does not answer a
-    lower one, so a Duke's invitation reaches Dukes, Marquesses and everyone beneath them,
-    while a Knight's reaches only Knights. Commoners (no level) are never included.
+
+def closest_dynasty(host_prestige, dynasties, royal_only=False):
+    """The dynasty to invite from: closest in prestige to the host's, or the lowest one.
+
+    `dynasties` is an iterable of InviteDynasty. A host with no dynasty (`host_prestige` is
+    None) has no prestige to compare with, so the lowest-prestige dynasty is chosen. With
+    `royal_only` the pool is narrowed to royal dynasties first; None means there is nobody
+    to invite. Ties go to the lower prestige, then the key, so the result is stable.
     """
-    if not my_level:
-        return []
-    return [(sim_info, level) for sim_info, level in nobles
-            if level is not None and 0 < level <= my_level]
+    pool = [dynasty for dynasty in dynasties if dynasty.royal or not royal_only]
+    if not pool:
+        return None
+    if host_prestige is None:
+        return min(pool, key=lambda dynasty: (dynasty.prestige, dynasty.key))
+    return min(pool, key=lambda dynasty: (
+        abs(dynasty.prestige - host_prestige), dynasty.prestige, dynasty.key))

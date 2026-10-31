@@ -3,5 +3,5 @@
      test net worth, so the script gate in atr_logic.py is authoritative. -->
 <I c="Objective" i="objective" m="event_testing.objective_tuning" n="HouseRules_NobleSavings_Level1" s="2130706433">
   <T n="display_text">{{string:Have a net worth of §35,000}}</T>
-  <T n="tooltip">{{string:The career panel cannot test net worth; run houserules.royalty.requirements to see whether this is met. Ascent to Royalty also needs a friend at your current rank or above.}}</T>
+  <T n="tooltip">{{string:The career panel cannot test net worth; run houserules.royalty.requirements to see whether this is met. Ascent to Royalty also needs the rank's friends outside your dynasty.}}</T>
 </I>

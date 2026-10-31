@@ -11,9 +11,11 @@ one holder per world.
 
 Where the numbers come from:
 - Net worth: household net worth (money plus home).
-- Friendship: the Sim must be friends with someone outside their own dynasty. Rank is not
-  consulted - a default save has barely any titled sims. Friendship is the game's friendship
-  track; the threshold is FRIEND_MIN_SCORE.
+- Friendship: the Sim must be friends with the right number of people outside their own
+  dynasty. It gets gradually harder: one dynasty member, then two, then a dynasty head,
+  then a royal dynasty member, two royal dynasty members, a royal dynasty head, and two
+  royal dynasty heads. A royal dynasty is one whose head holds any Noble title; dynasty-less
+  friends do not count. The threshold is FRIEND_MIN_SCORE.
 - Crown: from Grand Duke the only requirement is that no higher rank is in the region: no
   Monarch holds the throne (the pack already enforces one holder per world).
 
@@ -22,13 +24,13 @@ The pack is required. Without EP21 the mod loads but stays inactive and logs why
 The requirements are visible in game. The career panel's own promotion list is EA client
 tuning, so it cannot be filled from a script; instead the nine requirement aspirations
 attached to the Noble career levels are overridden (tuning/NobleAspiration_*.xml,
-tuning/NobleSavings_*.xml and tuning/NobleFriend_*.xml) to show the same two requirements.
-Those rows are display only: the game cannot test net worth, a friend's noble rank or a
+tuning/NobleSavings_*.xml and tuning/NobleFriend_*.xml) to show the same requirements.
+Those rows are display only: the game cannot test net worth, a friend's dynasty or a
 vacant throne from a career objective, so they never complete on their own. The values are
 pushed to the panel (money prints as "§current / §goal", not the default 0/1); the script
 gate below is the authority.
 
-The check is live, never cached: every promotion attempt re-reads net worth, the friend and
+The check is live, never cached: every promotion attempt re-reads net worth, the friends and
 the throne. In addition, the active household's nobles are re-checked each day just before
 the career hands out the day's duties (a wrapper on clear_and_request_assignments), which
 refreshes the panel rows whether or not a promotion is attempted. Promotion itself still
@@ -43,7 +45,7 @@ Cheats:
   houserules.royalty.set <kind> on|off   enabled, notify, net_worth, friend, monarch
   houserules.royalty.panel               re-send this Sim's panel rows (ticked when met)
   houserules.royalty.friends             every friend, their dynasty, and whether it counts
-  houserules.royalty.invite              summon the nobles at or below this Sim's rank
+  houserules.royalty.invite              summon the closest-prestige dynasty's members
   houserules.royalty.ally <sim id>       form a native dynasty alliance (testing/politics)
   houserules.royalty.grant <level>       force a native noble level, bypassing the gate
   houserules.royalty.reset               forget this dynasty's recorded progress
@@ -58,7 +60,9 @@ from server_commands.argument_helpers import (OptionalSimInfoParam, OptionalTarg
                                              get_optional_target)
 
 import atr_log
-from atr_logic import (CHECKS, failure_text, format_money, is_crown, missing, noble_guests,
+from atr_logic import (CHECKS, Friend, InviteDynasty, closest_dynasty, failure_text,
+                       format_money, friend_counts, friend_requirement,
+                       friend_requirement_text, friend_text, is_crown, missing,
                        rank_for_level, rank_title, requirements)
 
 _FRIEND_MIN_SCORE = 30   # the game's friendship track: at/above this is a friend
@@ -229,25 +233,32 @@ def _record(sim_info, dynasty):
     return record
 
 
-def _dynasty_friend(sim_info):
-    """The name of a friend outside the Sim's own dynasty, or None.
+def _royal_dynasty(dynasty):
+    """True when the dynasty's head holds a Noble title (any level above 0)."""
+    if dynasty is None:
+        return False
+    try:
+        head = dynasty.get_head_sim_info()
+    except Exception:
+        return False
+    return head is not None and _noble_level_of(head) is not None
 
-    Rank is deliberately not consulted: a default save has barely any titled sims. Only kin
-    in one's *own* dynasty are excluded - a friend who belongs to no dynasty at all counts,
-    which is what makes this reachable (the pack's noble NPCs have no dynasty record).
-    """
+
+def _friend_rows(sim_info):
+    """Every friendship-qualified Sim, as (sim_info, dynasty, score, same, head, royal)."""
     tracker = getattr(sim_info, "relationship_tracker", None)
     if tracker is None:
-        return None
+        return []
     try:
         from relationships.relationship_track import RelationshipTrack
         track = RelationshipTrack.FRIENDSHIP_TRACK
     except Exception:
         atr_log.log_exception("reading the friendship track")
-        return None
+        return []
     own = _dynasty(sim_info)
     own_id = getattr(own, "id", None)
     manager = services.sim_info_manager()
+    rows = []
     try:
         for other_id in tracker.target_sim_gen():
             try:
@@ -260,14 +271,50 @@ def _dynasty_friend(sim_info):
                 if other is None or getattr(other, "is_dead", False):
                     continue
                 theirs = _dynasty(other)
-                if own_id is not None and theirs is not None                         and str(getattr(theirs, "id", None)) == str(own_id):
-                    continue   # same family: not an outside alliance
-                return _name(other)
+                same = (own_id is not None and theirs is not None
+                        and str(getattr(theirs, "id", None)) == str(own_id))
+                head = (theirs is not None
+                        and str(theirs.get_head_sim_id()) == str(getattr(other, "id", None)))
+                rows.append((other, theirs, score, same, head, _royal_dynasty(theirs)))
             except Exception:
                 continue
     except Exception:
         atr_log.log_exception("reading dynasty friends")
-    return None
+    return rows
+
+
+def _has_other_dynasty(own):
+    """True when there is a dynasty other than the Sim's own in the save."""
+    if own is None:
+        return True
+    try:
+        own_id = str(getattr(own, "id", None))
+        return any(str(dynasty.id) != own_id
+                   for dynasty in services.dynasty_service().get_all_dynasties().values())
+    except Exception:
+        return True
+
+
+def _dynasty_friends(sim_info):
+    """Friends outside the Sim's own dynasty that belong to a dynasty.
+
+    A friend with no dynasty record no longer counts: the lowest rung asks for a dynasty
+    member specifically. Kin in the Sim's own dynasty are excluded while another dynasty
+    exists; when it is the only dynasty in the save, its members count too (the same
+    fallback the throne's invitation uses). The facts the ladder needs (is this friend a
+    dynasty head, is the dynasty royal) are read here so atr_logic stays free of game
+    imports.
+    """
+    own = _dynasty(sim_info)
+    allow_same = own is not None and not _has_other_dynasty(own)
+    friends = []
+    for other, theirs, _score, same, head, royal in _friend_rows(sim_info):
+        if theirs is None:
+            continue
+        if same and not allow_same:
+            continue
+        friends.append(Friend(_name(other), head, royal))
+    return friends
 
 
 def _metrics(sim_info):
@@ -279,7 +326,7 @@ def _metrics(sim_info):
         "dynasty": dynasty,
         "record": record,
         "net_worth": _net_worth(sim_info),
-        "dynasty_friend": _dynasty_friend(sim_info),
+        "friends": _dynasty_friends(sim_info),
     }
 
 
@@ -308,7 +355,7 @@ def _failures(sim_info, career, target, inherited=False):
     return missing(
         target, _max_level(career),
         net_worth=metrics["net_worth"],
-        dynasty_friend=metrics["dynasty_friend"],
+        friends=metrics["friends"],
         throne_empty=_throne_empty(sim_info, career),
         inherited=inherited,
         checks=_checks(),
@@ -359,12 +406,13 @@ def _record_promotion(sim_info, level):
         record.setdefault("promotions", []).append({
             "day": _today(), "sim_id": getattr(sim_info, "id", None),
             "sim": _name(sim_info), "level": int(level),
-            "net_worth": metrics["net_worth"], "friend": metrics["dynasty_friend"],
+            "net_worth": metrics["net_worth"],
+            "friends": [friend.name for friend in metrics["friends"]],
         })
         _save()
-        atr_log.log("promoted {} to noble level {} (net worth §{}, dynasty friend {})".format(
+        atr_log.log("promoted {} to noble level {} (net worth §{}, {} dynasty friend(s))".format(
             _name(sim_info), level, format_money(metrics["net_worth"]),
-            metrics["dynasty_friend"]))
+            len(metrics["friends"])))
     except Exception:
         atr_log.log_exception("recording a promotion")
 
@@ -491,48 +539,65 @@ def _noble_level_of(sim_info):
     return level or None
 
 
-def _sims_by_rank(sim_info, level):
-    """Every other noble in the save, as [(sim_info, level)]; noble_guests trims the list."""
-    rows = []
-    manager = getattr(services, "sim_info_manager", None)
-    if manager is None:
-        return rows
-    for other in manager().values():
-        if other is sim_info:
-            continue
-        try:
-            other_level = _noble_level_of(other)
-        except Exception:
-            continue
-        if other_level:
-            rows.append((other, other_level))
-    return noble_guests(rows, level)
+def _dynasty_prestige(dynasty):
+    """The pack's total dynasty prestige, or None when the Sim has no dynasty."""
+    if dynasty is None:
+        return None
+    try:
+        stat = dynasty.get_total_prestige_stat()
+        if stat is not None:
+            return float(stat.get_value())
+    except Exception:
+        pass
+    try:
+        return float(getattr(dynasty, "_total_prestige", 0) or 0)
+    except Exception:
+        return 0.0
 
 
-def _dynasty_guests(sim_info):
-    """Kin from the Sim's dynasty, used when there is no other noble to call.
+def _invite_options(sim_info):
+    """(own dynasty, own prestige, InviteDynasty list, dynasty by key).
 
-    With the pack's noble NPCs not in the save yet there may be nobody at or below the
-    Sim's rank, so the invitation falls back to their dynasty. If the Sim belongs to no
-    dynasty, every dynasty is considered.
+    The Sim's own dynasty is left out when there is another one to call; it is used only
+    when it is the sole dynasty in the save. A Sim with no dynasty has no prestige to
+    compare, so every dynasty is a candidate and the lowest-prestige one wins.
     """
+    service = services.dynasty_service()
+    own = _dynasty(sim_info)
+    own_key = str(own.id) if own is not None else None
+    options = []
+    by_key = {}
+    for dynasty in service.get_all_dynasties().values():
+        key = str(dynasty.id)
+        if own_key is not None and key == own_key:
+            continue
+        if not _living_members(dynasty, sim_info):
+            continue
+        options.append(InviteDynasty(key, _dynasty_prestige(dynasty),
+                                     _royal_dynasty(dynasty)))
+        by_key[key] = dynasty
+    if not options and own is not None and _living_members(own, sim_info):
+        key = str(own.id)
+        options.append(InviteDynasty(key, _dynasty_prestige(own), _royal_dynasty(own)))
+        by_key[key] = own
+    return own, _dynasty_prestige(own), options, by_key
+
+
+def _living_members(dynasty, sim_info):
+    """The dynasty's living members, most senior Noble first, excluding the host."""
     members = []
     try:
-        service = services.dynasty_service()
-        own = _dynasty(sim_info)
-        dynasties = [own] if own is not None else list(service.get_all_dynasties().values())
-        seen = set()
-        for dynasty in dynasties:
-            for sim_id in dynasty.get_members():
-                if sim_id == sim_info.id or sim_id in seen:
-                    continue
-                member = service and services.sim_info_manager().get(sim_id)
-                if member is None:
-                    continue
-                seen.add(sim_id)
-                members.append((member, _noble_level_of(member)))
+        manager = services.sim_info_manager()
+        for sim_id in dynasty.get_members():
+            if sim_id == getattr(sim_info, "id", None):
+                continue
+            member = manager.get(sim_id)
+            if member is None or getattr(member, "is_dead", False):
+                continue
+            members.append(member)
     except Exception:
         atr_log.log_exception("gathering dynasty members")
+    members.sort(key=lambda member: (-(_noble_level_of(member) or 0), _name(member)))
     return members
 
 
@@ -547,46 +612,42 @@ def _summon(sim_infos, host_sim_info):
 
 
 def invite_fellow_nobles(sim_info):
-    """Calls two or three people to the lot. Returns (count, message).
+    """Calls two or three people from the dynasty closest in prestige to the host.
 
-    Rank comes first: the most senior nobles at or below the Sim's own rank, highest rank
-    first, and a higher-ranked noble never answers a lower one. If that is not enough to
-    make a gathering, the Sim's dynasty fills the rest (never anyone above the Sim's rank),
-    which is what makes this useful before the pack's noble NPCs exist in a save. Sims are
-    never invented - if the save has nobody to call, it says so.
+    At Count (level 4) and above only royal dynasties are considered: a royal dynasty is
+    one whose head holds a Noble title. A host with no dynasty has no prestige to compare,
+    so the lowest-prestige dynasty is called instead. The host's own dynasty is not called
+    unless it is the only one in the save. Sims are never invented - if the chosen dynasty
+    has nobody living to come, the message says so.
     """
-    level = _noble_level_of(sim_info)
-    if level is None:
+    career = _noble_career(sim_info)
+    if career is None:
         return 0, "Only a noble can invite fellow nobles."
-    # Rank decides first: the most senior nobles at or below the Sim's own rank, then
-    # dynasty kin only to fill the room. A dynasty member above the Sim's rank never comes,
-    # and a titled one is already in the noble list.
-    nobles = sorted(_sims_by_rank(sim_info, level), key=lambda pair: -(pair[1] or 0))
-    guests = list(nobles[:_INVITE_GUESTS])
-    chosen = {guest.id for guest, _ in guests}
-    if len(guests) < _INVITE_GUESTS:
-        for member, member_level in _dynasty_guests(sim_info):
-            if len(guests) >= _INVITE_GUESTS:
-                break
-            if member.id in chosen:
-                continue
-            if member_level is not None and member_level > level:
-                continue
-            chosen.add(member.id)
-            guests.append((member, member_level))
+    level = _level(career)
+    own, host_prestige, options, by_key = _invite_options(sim_info)
+    royal_only = level >= 4
+    chosen = closest_dynasty(host_prestige, options, royal_only=royal_only)
+    if chosen is None:
+        if royal_only:
+            return 0, "There is no royal dynasty to invite from."
+        return 0, "There is no dynasty to invite from."
+    dynasty = by_key[chosen.key]
+    guests = _living_members(dynasty, sim_info)[:_INVITE_GUESTS]
     if not guests:
-        return 0, "There is no other noble at your rank or below, and no dynasty to call on."
-    if not _summon([guest for guest, _ in guests], sim_info):
+        return 0, "There is nobody living in {} to invite.".format(
+            getattr(dynasty, "name", None) or "that dynasty")
+    if not _summon(guests, sim_info):
         return 0, "You need to be on a lot to invite anyone."
-    nobles_called = sum(1 for guest, _ in guests if _noble_level_of(guest) is not None)
-    names = ", ".join(_name(guest) for guest, _ in guests)
-    atr_log.log("invited {} for {} ({} noble(s), {} dynasty)".format(
-        names, _name(sim_info), nobles_called, len(guests) - nobles_called))
-    if len(guests) == 1:
-        return 1, "Only {} could come: {}. There is nobody else at your rank or below.".format(
-            names, "a noble" if nobles_called else "a dynasty member")
-    return len(guests), "Invited {} ({} noble(s), {} from your dynasty).".format(
-        names, nobles_called, len(guests) - nobles_called)
+    names = ", ".join(_name(guest) for guest in guests)
+    if own is None:
+        reason = "the lowest-prestige dynasty"
+    else:
+        reason = "closest in prestige to yours ({} vs {})".format(
+            int(chosen.prestige), int(host_prestige or 0))
+    atr_log.log("invited {} from {} for {} ({})".format(
+        names, getattr(dynasty, "name", None) or chosen.key, _name(sim_info), reason))
+    return len(guests), "Invited {} from {} ({}).".format(
+        names, getattr(dynasty, "name", None) or "a dynasty", reason)
 
 
 _THRONE_INTERACTION = 471359   # EP21's generic_Throne: every throne runs it
@@ -614,6 +675,55 @@ def _invite_affordance():
     return services.get_instance_manager(Types.INTERACTION).get(_INVITE_AFFORDANCE_ID)
 
 
+_gate_test_class = None
+
+
+def _noble_career_test():
+    """A test instance that only passes for a Sim in the Noble career.
+
+    The affordance is installed on every throne, so without this a commoner would see
+    Invite Fellow Nobles and get the refusal only after clicking it.
+    """
+    global _gate_test_class
+    if _gate_test_class is None:
+        from event_testing.results import TestResult
+        from event_testing.test_base import BaseTest
+        from interactions import ParticipantType
+
+        class InNobleCareerTest(BaseTest):
+            def get_expected_args(self):
+                return {"subjects": ParticipantType.Actor}
+
+            def __call__(self, subjects=(), **kwargs):
+                if not isinstance(subjects, (tuple, list)):
+                    subjects = (subjects,)
+                for subject in subjects or ():
+                    try:
+                        if subject is not None and _noble_career(subject) is not None:
+                            return TestResult.TRUE
+                    except Exception:
+                        continue
+                return TestResult(False, "Only a noble can invite fellow nobles.",
+                                  tooltip=(self.tooltip))
+
+        _gate_test_class = InNobleCareerTest
+    return _gate_test_class()
+
+
+def _gate_invite_affordance(affordance):
+    """Add the noble-career test to the affordance, once."""
+    try:
+        from event_testing.tests import TestList
+        existing = tuple(getattr(affordance, "test_globals", ()) or ())
+        if _gate_test_class is not None and any(
+                isinstance(test, _gate_test_class) for test in existing):
+            return
+        affordance.test_globals = TestList(existing + (_noble_career_test(),))
+        atr_log.log("throne: Invite Fellow Nobles is now limited to the Noble career")
+    except Exception:
+        atr_log.log_exception("gating Invite Fellow Nobles on the Noble career")
+
+
 def _install_throne_affordance():
     """Adds Invite Fellow Nobles to every throne definition.
 
@@ -625,6 +735,7 @@ def _install_throne_affordance():
     if affordance is None:
         atr_log.log("throne: Invite Fellow Nobles tuning not loaded (is the package installed?)")
         return
+    _gate_invite_affordance(affordance)
     manager = services.definition_manager()
     patched = []
     for cls in getattr(manager, "types", {}).values():
@@ -689,6 +800,7 @@ def _wrap_zone_load():
 
 # --- Career panel status ---------------------------------------------------------------
 _PANEL_SAVINGS = re.compile(r"HouseRules_NobleSavings_Level(\d+)$")
+_PANEL_FRIEND = re.compile(r"HouseRules_NobleFriend_Level(\d+)$")
 
 
 def _panel_row(sim_info, objective, career=None):
@@ -698,20 +810,28 @@ def _panel_row(sim_info, objective, career=None):
     rows, so the game's own objectives are untouched.
     """
     name = str(getattr(objective, "__name__", ""))
-    match = _PANEL_SAVINGS.match(name)
+    savings = _PANEL_SAVINGS.match(name)
+    friend = _PANEL_FRIEND.match(name)
     is_ours = name.startswith("HouseRules_Noble")
-    if match is None and not is_ours:
+    if savings is None and friend is None and not is_ours:
         return None
     if career is None:
         career = _noble_career(sim_info)
-    if match is not None:
+    if savings is not None:
         if career is None:
             return None
-        rank = rank_for_level(int(match.group(1)), _max_level(career))
+        rank = rank_for_level(int(savings.group(1)), _max_level(career))
         return (min(int(_net_worth(sim_info)), int(rank.net_worth)), int(rank.net_worth),
                 True, True)
-    if name.startswith("HouseRules_NobleFriend"):
-        return (1 if _dynasty_friend(sim_info) else 0), 1, False, False
+    if friend is not None:
+        if career is None:
+            return None
+        need = friend_requirement(int(friend.group(1)), _max_level(career))
+        if need is None:
+            return None
+        kind, count = need
+        have = friend_counts(_dynasty_friends(sim_info))[kind]
+        return min(have, count), count, False, True
     if name.startswith("HouseRules_NobleMonarch"):
         if career is None:
             return None
@@ -850,13 +970,14 @@ def _summary_lines(sim_info):
     career = _noble_career(sim_info)
     metrics = _metrics(sim_info)
     record = metrics["record"]
-    friend = metrics["dynasty_friend"] or "none"
+    counts = friend_counts(metrics["friends"])
     lines = [
         "Ascent to Royalty: {} (EP21 {})".format(
             "on" if _settings().get("enabled", True) else "off",
             "found" if _ACTIVE else "not installed - inactive"),
-        "Dynasty: {} [{}], net worth §{}, friend in a dynasty: {}".format(
-            record.get("name") or "?", record["key"], format_money(metrics["net_worth"]), friend),
+        "Dynasty: {} [{}], net worth §{}, friends: {} outside, {} heads, {} royal".format(
+            record.get("name") or "?", record["key"], format_money(metrics["net_worth"]),
+            counts["member"], counts["head"], counts["royal_member"]),
     ]
     if career is None:
         lines.append("Selected Sim is not in the Noble career.")
@@ -901,7 +1022,7 @@ def _requirement_lines(sim_info):
     rows = requirements(
         target, max_level,
         net_worth=metrics["net_worth"],
-        dynasty_friend=metrics["dynasty_friend"],
+        friends=metrics["friends"],
         throne_empty=_throne_empty(sim_info, career),
         checks=_checks(),
     )
@@ -1037,9 +1158,11 @@ def royalty_levels(_connection=None):
         elif is_crown(level + 1, max_level):
             next_gate = "no Monarch in the region"
         else:
-            next_gate = "§{} net worth, a friend at {} or above".format(
-                format_money(rank_for_level(level + 1, max_level).net_worth),
-                rank_title(level, max_level))
+            need = friend_requirement(level + 1, max_level)
+            friend_line = (friend_requirement_text(*need) if need is not None
+                           else "no friendship requirement")
+            next_gate = "§{} net worth, {}".format(
+                format_money(rank_for_level(level + 1, max_level).net_worth), friend_line)
         output("  {}: {} - {}".format(level, rank_title(level, max_level), next_gate))
         atr_log.log("levels {}: {} -> {}".format(level, rank_title(level, max_level), next_gate))
 
@@ -1094,41 +1217,35 @@ def royalty_friends(_connection=None):
         return
     own = _dynasty(sim_info)
     own_id = str(getattr(own, "id", None)) if own is not None else None
-    output("{} own dynasty: {} [{}]".format(
-        _name(sim_info), getattr(own, "name", None) or "none", own_id or "-"))
-    tracker = getattr(sim_info, "relationship_tracker", None)
-    if tracker is None:
-        output("No relationship tracker.")
-        return
-    try:
-        from relationships.relationship_track import RelationshipTrack
-        track = RelationshipTrack.FRIENDSHIP_TRACK
-    except Exception:
-        atr_log.log_exception("reading the friendship track")
-        return
-    manager = services.sim_info_manager()
-    rows = 0
-    for other_id in tracker.target_sim_gen():
-        if other_id == getattr(sim_info, "id", None):
-            continue
-        score = tracker.get_relationship_score(other_id, track=track)
-        if score is None or score < _FRIEND_MIN_SCORE:
-            continue
-        other = manager.get(other_id)
-        if other is None:
-            continue
-        theirs = _dynasty(other)
+    allow_same = own is not None and not _has_other_dynasty(own)
+    output("{} own dynasty: {} [{}]{}".format(
+        _name(sim_info), getattr(own, "name", None) or "none", own_id or "-",
+        " (only dynasty in the save)" if allow_same else ""))
+    rows = _friend_rows(sim_info)
+    counts = friend_counts(_dynasty_friends(sim_info))
+    for other, theirs, score, same, head, royal in rows:
         theirs_id = str(getattr(theirs, "id", None)) if theirs is not None else None
-        relation = "no dynasty"
-        if theirs is not None:
-            relation = "SAME dynasty" if (own_id is not None and theirs_id == own_id) else "other dynasty"
+        if same:
+            relation = "own dynasty, counts (only dynasty)" if allow_same else \
+                "excluded (own dynasty)"
+        elif theirs is None:
+            relation = "excluded (no dynasty)"
+        else:
+            tags = ["member"]
+            if head:
+                tags.append("head")
+            if royal:
+                tags.append("royal")
+            relation = ", ".join(tags)
         output("  {}: score {}, {} [{}] -> {}".format(
             _name(other), int(score), getattr(theirs, "name", None) or "none",
-            theirs_id or "-", "counts" if relation != "SAME dynasty" else "excluded"))
-        rows += 1
+            theirs_id or "-", relation))
     if not rows:
         output("No friends at {}+ on the friendship track.".format(_FRIEND_MIN_SCORE))
-    atr_log.log("friends check for {}: {} qualifying rows".format(_name(sim_info), rows))
+    output("Counts: {} members, {} heads, {} royal members, {} royal heads".format(
+        counts["member"], counts["head"], counts["royal_member"], counts["royal_head"]))
+    atr_log.log("friends check for {}: {} qualifying rows, {}".format(
+        _name(sim_info), len(rows), counts))
 
 
 @sims4.commands.Command("houserules.royalty.invite", command_type=sims4.commands.CommandType.Live)
