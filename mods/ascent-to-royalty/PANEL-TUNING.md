@@ -40,21 +40,40 @@ the rows themselves (text and tooltip).
 Adding a tuning class to this path means adding it to `SIMDATA_GROUPS` in `tools/tuning.py`
 together with the schema the game has registered for it.
 
-## The rows do not tick, but they show values
+## The rows carry no test; the script completes them
 
 The game stores an objective's presentation in the per-tuning SimData and its test
 (`objective_test`, `objective_completion_type`, `completion_loot`) in the pack's *combined*
 tuning resource (`0x62E94D38`). No package in the game — EA's or any mod's — carries an
 objective test in a per-tuning SimData, and a hand-made one is not something to guess at.
 
-So the rows are reminders: net worth, the dynastic friendships and the vacant throne are all
-shown, and none of them can ever complete. `houserules.royalty.requirements` is the authority
-on what is actually met.
+So the rows cannot complete on their own: net worth, the dynastic friendships and the vacant
+throne are all shown, but no objective test ever fires. `houserules.royalty.requirements` is
+the authority on what is actually met.
 
-The script pushes the current values before the day's duties and on zone load, so the panel
-does not sit at its default `0/1`. Money rows print `§current / §goal` (for example
-`§10,000 / §35,000`), friendship rows print `current / required` (for example `1 / 2`), and
-the throne row shows no count. `houserules.royalty.panel` re-pushes them on demand.
+Two things make the panel behave anyway. The script pushes the current values (money rows
+print `§current / §goal`, friendship rows `current / required`, the throne row shows no
+count), and `_sync_promotion_milestone` completes the current level's aspiration milestone
+exactly when the gate reports ready, clearing it again if a requirement stops being met. The
+milestone completion matters beyond the panel: `Career.evaluate_career_performance` only
+auto-promotes when the promotion aspiration is complete, so without it a Sim whose gate is
+ready would never be promoted. `houserules.royalty.panel` re-pushes on demand.
+
+The rows are looked up **by instance id** (`_panel_objectives` in `atr_main.py`), not read
+from `career.current_level_tuning.aspiration`: in game the server can resolve that reference
+to EA's copy even while the client shows our override, and then a push driven by that list
+finds nothing. Ids per promotion rank N: savings `0x7F000000 + N` (up to Level8), friend
+`0x7F000010 + N` (up to Level7), crown `0x7F000021`.
+
+EA's throne has two options here. **Claim Lost Career Rank** (`sI_NobleCareer_ClaimCareerRank`)
+is the inheritance path: it needs one of EA's "no promise" buffs, so it stays grey unless a
+title was lost. The normal one, **Claim Noble Promotion** (`sI_NobleCareer_EarlyPromotion`),
+runs `testSet_NobleCareer_CompletedPromotionalRequirements`, which checks that the
+**original EA objectives** for the level (Charisma, Swordsmanship, …) are completed — even
+though our aspiration override hides them from the panel. `_sync_promotion_milestone`
+therefore completes both our rows and the objectives of the server's aspiration when the
+gate passes, and clears both again when it stops passing. Without that the throne option
+stays grey however ticked the panel looks. EA also requires career performance ≥ 85.
 
 EA re-sends the rows itself on load and when a Sim is selected, so pushing once is not
 enough: `CareerTracker.activate_career_aspirations` and `AspirationTracker.update_objective`

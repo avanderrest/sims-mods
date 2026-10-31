@@ -1,6 +1,6 @@
 """Build mods into the game's Mods folder.
 
-Run with Python 3.7:  py -3.7 tools/build.py [mod-name ...] [--no-install]
+Run with Python 3.7:  py -3.7 tools/build.py [mod-name ...] [--no-install] [--scripts-only]
 
 First runs pytest on every mods/<name>/tests/ (with that mod's scripts/ importable);
 nothing is built if a test fails.
@@ -59,6 +59,7 @@ def main(argv):
         sys.exit("Run this with Python 3.7 (py -3.7): the game only loads 3.7 bytecode.")
 
     install = "--no-install" not in argv
+    scripts_only = "--scripts-only" in argv
     names = [a for a in argv if not a.startswith("--")]
     mod_dirs = [d for d in sorted(config.MODS_SRC_DIR.iterdir())
                 if d.is_dir() and (not names or d.name in names)]
@@ -99,6 +100,8 @@ def main(argv):
         dest = config.MODS_DIR / config.CREATOR
         dest.mkdir(parents=True, exist_ok=True)
         for f in built:
+            if scripts_only and f.suffix != ".ts4script":
+                continue
             target = dest / f.name
             if _identical(f, target):
                 # Already installed byte-for-byte. Not copying also means a running game
@@ -106,6 +109,10 @@ def main(argv):
                 print("unchanged", target.relative_to(dest))
                 continue
             shutil.copy2(f, target)
+        if scripts_only:
+            print("installed script files only (the game holds the packages open)")
+            print("Close the game and run the build again to install the packages.")
+            return
         for mod_dir in mod_dirs:
             extra = mod_dir / "install"
             for f in sorted(p for p in extra.rglob("*") if p.is_file()):

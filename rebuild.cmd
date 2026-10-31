@@ -1,6 +1,7 @@
 @echo off
 rem Rebuilds every mod and installs the result into the game's Mods folder.
-rem Double-click this after changing anything under mods\ - close the game first.
+rem Double-click this after changing anything under mods\. If the game is open, script
+rem files are still copied; tuning packages are installed the next time it is closed.
 cd /d "%~dp0"
 
 rem --- prerequisites ---------------------------------------------------------------------
@@ -9,7 +10,9 @@ if errorlevel 1 goto :no_python
 py -3.7 -V >nul 2>&1
 if errorlevel 1 goto :no_python37
 
-rem --- the game keeps Mods\HouseRules locked while it runs -------------------------------
+rem --- the game keeps Mods\HouseRules packages locked while it runs ----------------------
+rem Script (.ts4script) files can still be replaced; tuning packages cannot, so with the
+rem game open the build copies only the scripts and leaves the packages for next time.
 rem Full paths, so a git-bash/MSYS "find" earlier on PATH cannot shadow these.
 "%SystemRoot%\System32\tasklist.exe" /fi "IMAGENAME eq TS4_x64.exe" 2>nul | "%SystemRoot%\System32\findstr.exe" /i /c:"TS4_x64.exe" >nul
 if not errorlevel 1 goto :game_running
@@ -29,17 +32,24 @@ exit /b 0
 
 :game_running
 echo.
-echo The Sims 4 is running. It holds Mods\HouseRules open, so installing
-echo would fail. Close the game, then double-click this file again.
+echo The Sims 4 is running. It holds the tuning packages open, so those
+echo cannot be replaced yet - but the script files can be copied now.
+echo.
+echo Building every mod and copying the script files...
+echo.
+py -3.7 tools\build.py --scripts-only || goto :failed
+echo.
+echo Done - restart The Sims 4 to load the new scripts.
+echo Close the game and run this file again if you also changed tuning.
 echo.
 pause
-exit /b 1
+exit /b 0
 
 :failed
 echo.
 echo The build failed - see the messages above.
 echo Nothing was installed when the tests fail; otherwise check that the
-echo game is closed and that mods\ contains only valid tuning XML.
+echo tuning XML is valid and that the files are not open in another program.
 echo.
 pause
 exit /b 1

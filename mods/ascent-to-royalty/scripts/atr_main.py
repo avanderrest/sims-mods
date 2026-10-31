@@ -25,10 +25,10 @@ The requirements are visible in game. The career panel's own promotion list is E
 tuning, so it cannot be filled from a script; instead the nine requirement aspirations
 attached to the Noble career levels are overridden (tuning/NobleAspiration_*.xml,
 tuning/NobleSavings_*.xml and tuning/NobleFriend_*.xml) to show the same requirements.
-Those rows are display only: the game cannot test net worth, a friend's dynasty or a
-vacant throne from a career objective, so they never complete on their own. The values are
-pushed to the panel (money prints as "§current / §goal", not the default 0/1); the script
-gate below is the authority.
+Those rows carry no test, so the game cannot complete them on its own. The script pushes
+their values (money prints as "§current / §goal", not the default 0/1) and marks the
+current level's aspiration milestone complete exactly when the gate below is met, which is
+also what lets EA's own auto-promotion path run. The script gate remains the authority.
 
 The check is live, never cached: every promotion attempt re-reads net worth, the friends and
 the throne. In addition, the active household's nobles are re-checked each day just before
@@ -360,6 +360,105 @@ def _failures(sim_info, career, target, inherited=False):
         inherited=inherited,
         checks=_checks(),
     ), metrics
+
+
+_PANEL_PREFIX = "HouseRules_Noble"
+
+
+def _promotion_aspiration(career):
+    return getattr(getattr(career, "current_level_tuning", None), "aspiration", None)
+
+
+_PANEL_SAVINGS_ID = 0x7F000001
+_PANEL_FRIEND_ID = 0x7F000011
+_PANEL_MONARCH_ID = 0x7F000021
+
+
+def _objective_by_id(instance_id):
+    try:
+        from sims4.resources import Types
+        return services.get_instance_manager(Types.OBJECTIVE).get(instance_id)
+    except Exception:
+        return None
+
+
+def _panel_objectives(career):
+    """Our panel rows for this level's promotion, looked up by instance id.
+
+    The career level's `aspiration` reference can still resolve to EA's copy even when the
+    override is loaded (the client and the server tune separately), so the rows are not
+    read from that list. The ids mirror tuning/NobleSavings_*, NobleFriend_* and
+    NobleMonarch_*: the row for the promotion to rank N is LevelN.
+    """
+    target = _level(career) + 1
+    if is_crown(target, _max_level(career)):
+        ids = [_PANEL_MONARCH_ID]
+    else:
+        ids = []
+        if target <= 8:
+            ids.append(_PANEL_SAVINGS_ID + target - 1)
+        if target <= 7:
+            ids.append(_PANEL_FRIEND_ID + target - 1)
+    return [objective for objective in (_objective_by_id(i) for i in ids)
+            if objective is not None]
+
+
+def _sync_promotion_milestone(sim_info, career=None, ready=None):
+    """Mark the career panel's promotion task complete when the script gate is met.
+
+    EA only auto-promotes when the current level's aspiration milestone is complete
+    (`Career.evaluate_career_performance`). Our rows carry no objective test, so they can
+    never complete on their own and the Sim would stay at its rank however ready the gate
+    says. Completing the milestone (and our rows, so the panel ticks) closes that gap; when
+    a requirement stops being met the milestone and our rows are cleared again. EA's own
+    rows (Charisma on level 1) are left alone.
+    """
+    career = career or _noble_career(sim_info)
+    if career is None:
+        return None
+    level = _level(career)
+    max_level = _max_level(career)
+    if level >= max_level:
+        return None
+    aspiration = _promotion_aspiration(career)
+    tracker = getattr(sim_info, "aspiration_tracker", None)
+    if aspiration is None or tracker is None:
+        return None
+    if _bypass or not _ACTIVE or not _settings().get("enabled", True):
+        # The gate is off, so nothing may hold the game's own promotion path back.
+        ready = True
+    elif ready is None:
+        found, _ = _failures(sim_info, career, min(max_level, level + 1))
+        ready = not found
+    server_objectives = list(getattr(aspiration, "objectives", ()) or ())
+    panel_objectives = _panel_objectives(career)
+    objectives = server_objectives + [o for o in panel_objectives
+                                      if o not in server_objectives]
+    try:
+        if ready:
+            changed = False
+            for objective in objectives:
+                if not tracker.objective_completed(objective):
+                    tracker.complete_objective(objective, aspiration)
+                    changed = True
+            if not tracker.milestone_completed(aspiration):
+                tracker.complete_milestone(aspiration, sim_info)
+                changed = True
+            if changed:
+                tracker.send_if_dirty()
+                atr_log.log("promotion task completed for {} (level {})".format(
+                    _name(sim_info), level + 1))
+        elif tracker.milestone_completed(aspiration):
+            for objective in objectives:
+                if tracker.objective_completed(objective):
+                    tracker.reset_objective(objective)
+            tracker.reset_milestone(aspiration)
+            tracker.send_if_dirty()
+            atr_log.log("promotion task reset for {} (level {})".format(
+                _name(sim_info), level + 1))
+    except Exception:
+        atr_log.log_exception("syncing the promotion task")
+    return ready
 
 
 def _notify(title, text, owner=None):
@@ -843,7 +942,7 @@ def _panel_row(sim_info, objective, career=None):
     name = str(getattr(objective, "__name__", ""))
     savings = _PANEL_SAVINGS.match(name)
     friend = _PANEL_FRIEND.match(name)
-    is_ours = name.startswith("HouseRules_Noble")
+    is_ours = name.startswith(_PANEL_PREFIX)
     if savings is None and friend is None and not is_ours:
         return None
     if career is None:
@@ -882,6 +981,8 @@ def _push_panel_status(sim_info):
     career = _noble_career(sim_info)
     if career is None:
         return 0
+    # Keep the game's promotion task in step with the gate before sending its values.
+    _sync_promotion_milestone(sim_info, career)
     tracker = getattr(sim_info, "aspiration_tracker", None)
     aspiration = getattr(career.current_level_tuning, "aspiration", None)
     if tracker is None or aspiration is None:
@@ -891,7 +992,9 @@ def _push_panel_status(sim_info):
         return 0
     pushed = 0
     rows = []
-    for objective in getattr(aspiration, "objectives", ()) or ():
+    objectives = _panel_objectives(career) or list(
+        getattr(aspiration, "objectives", ()) or ())
+    for objective in objectives:
         values = _panel_row(sim_info, objective, career)
         if values is None:
             continue   # EA's own rows (Charisma) are the game's business
@@ -908,6 +1011,9 @@ def _push_panel_status(sim_info):
         except Exception:
             atr_log.log_exception("pushing panel status for {}".format(
                 getattr(objective, "__name__", objective)))
+    if not pushed:
+        atr_log.log("panel status pushed nothing for {}: objectives are {}".format(
+            _name(sim_info), [str(getattr(o, "__name__", o)) for o in objectives]))
     if pushed:
         try:
             tracker.send_if_dirty()

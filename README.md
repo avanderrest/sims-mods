@@ -261,10 +261,17 @@ requirements.
 Requirements are visible in game through `houserules.royalty.requirements`. The career
 panel also lists them: `HouseRules_ascent-to-royalty.package` replaces the requirement
 aspiration for each Noble career level, so the panel shows the rows the script checks
-instead of EA's own Charisma requirement (level 1 keeps Charisma as well). Those rows are
-a reminder, not a progress bar - the panel cannot test net worth, a friend's dynasty or a
-vacant throne, so nothing ticks there. Without the package the mod still works; the panel
-just keeps EA's requirement.
+instead of EA's own Charisma requirement (level 1 keeps Charisma as well). The panel cannot
+test net worth, a friend's dynasty or a vacant throne, so the script pushes the current
+values and completes the level's promotion task as soon as the gate is met (and clears it
+again if a requirement stops being met). That completion is also what lets the game's own
+auto-promotion run; without it the Sim would never be promoted however ready the gate says.
+Without the package the mod still works; the panel just keeps EA's requirement. The throne's
+**Claim Noble Promotion** needs the level's original EA objectives completed as well (its
+test set checks them even though the panel no longer shows them), so the script completes
+both sets when the gate is met and the option enables once career performance is at 85 or
+above. **Claim Lost Career Rank** is a different, inheritance-only option and stays greyed
+unless a title was lost.
 
 **Inviting dignitaries.** A noble can use a throne's **Invite Dignitaries**: two or
 three living members of the dynasty closest in prestige to their own are invited to the
