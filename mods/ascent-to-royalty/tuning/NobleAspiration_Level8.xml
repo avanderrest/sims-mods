@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Overrides EP21's promotion aspiration attached to career_Noble_Level8.
-     From Duke there is no friendship requirement, so this level lists only net worth. -->
+     The career panel lists EA's original requirement (Charisma 9) alongside ours. From Duke
+     there is no friendship requirement, so this level adds only net worth. -->
 <I c="AspirationCareer" i="aspiration" m="aspirations.aspiration_tuning" n="aspiration_nobleCareer_Level8" s="466329">
   <L n="objectives">
+    <T>202047</T>
     <T>2130706440</T>
   </L>
 </I>

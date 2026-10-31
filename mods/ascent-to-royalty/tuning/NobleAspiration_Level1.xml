@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Overrides EP21's promotion aspiration attached to career_Noble_Level1.
-     The career panel lists the same requirements the script enforces, plus EA's Charisma row as a fallback while the custom rows are checked. -->
+     The career panel lists EA's original Charisma 2 row alongside the requirements the
+     script enforces (net worth and this rank's friends outside the dynasty). -->
 <I c="AspirationCareer" i="aspiration" m="aspirations.aspiration_tuning" n="aspiration_nobleCareer_Level1" s="466307">
   <L n="objectives">
     <T>26463</T>

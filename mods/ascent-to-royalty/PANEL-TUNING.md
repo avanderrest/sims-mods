@@ -69,11 +69,12 @@ EA's throne has two options here. **Claim Lost Career Rank** (`sI_NobleCareer_Cl
 is the inheritance path: it needs one of EA's "no promise" buffs, so it stays grey unless a
 title was lost. The normal one, **Claim Noble Promotion** (`sI_NobleCareer_EarlyPromotion`),
 runs `testSet_NobleCareer_CompletedPromotionalRequirements`, which checks that the
-**original EA objectives** for the level (Charisma, Swordsmanship, …) are completed — even
-though our aspiration override hides them from the panel. `_sync_promotion_milestone`
-therefore completes both our rows and the objectives of the server's aspiration when the
-gate passes, and clears both again when it stops passing. Without that the throne option
-stays grey however ticked the panel looks. EA also requires career performance ≥ 85.
+**original EA objectives** for the level (Charisma, Swordsmanship, …) are completed.
+`_sync_promotion_milestone` therefore completes both our rows and the objectives of the
+server's aspiration when the gate passes, and clears both again when it stops passing.
+Without that the throne option stays grey however ticked the panel looks. EA also requires
+career performance ≥ 85. The aspiration overrides keep those original EA rows in the list,
+so the panel shows them alongside our net-worth, friend and throne rows.
 
 EA re-sends the rows itself on load and when a Sim is selected, so pushing once is not
 enough: `CareerTracker.activate_career_aspirations` and `AspirationTracker.update_objective`
@@ -84,8 +85,9 @@ The push goes through `AspirationTracker.update_objective` with `from_init=True`
 `force_send_objective_update` does the same. Without that flag the tracker drops the dirty
 rows and the panel keeps the default `0/1`.
 
-`aspiration_nobleCareer_Level1` keeps EA's Charisma objective alongside ours; if the panel
-shows only Charisma, the aspiration override did not load.
+`aspiration_nobleCareer_Level1` … `Level9` each keep EA's original objective(s) for that
+level (Charisma and, where the pack asks for it, Swordsmanship) alongside our rows; if one of
+the EA rows is missing, the aspiration override did not load.
 
 ## Checking it in game
 

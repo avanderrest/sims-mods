@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Overrides EP21's promotion aspiration attached to career_Noble_Level4.
-     The career panel lists the same requirements the script enforces: net worth and this
-     rank's friends outside the dynasty. -->
+     The career panel lists EA's original requirements (Charisma 5, Swordsmanship 3) alongside
+     the ones the script enforces: net worth and this rank's friends outside the dynasty. -->
 <I c="AspirationCareer" i="aspiration" m="aspirations.aspiration_tuning" n="aspiration_nobleCareer_Level4" s="466310">
   <L n="objectives">
+    <T>26466</T>
+    <T>475846</T>
     <T>2130706436</T>
     <T>2130706452</T>
   </L>

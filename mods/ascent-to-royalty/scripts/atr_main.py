@@ -409,9 +409,10 @@ def _sync_promotion_milestone(sim_info, career=None, ready=None):
     EA only auto-promotes when the current level's aspiration milestone is complete
     (`Career.evaluate_career_performance`). Our rows carry no objective test, so they can
     never complete on their own and the Sim would stay at its rank however ready the gate
-    says. Completing the milestone (and our rows, so the panel ticks) closes that gap; when
-    a requirement stops being met the milestone and our rows are cleared again. EA's own
-    rows (Charisma on level 1) are left alone.
+    says. Completing the milestone (and every row listed on the aspiration, so the panel
+    ticks) closes that gap; when a requirement stops being met the milestone and those rows
+    are cleared again. EA's original rows (Charisma, Swordsmanship) are completed and cleared
+    together with ours, which is also what the throne's promotion test reads.
     """
     career = career or _noble_career(sim_info)
     if career is None:
